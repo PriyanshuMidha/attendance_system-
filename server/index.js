@@ -12,7 +12,18 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+function runsOnManagedHost() {
+  const r = String(process.env.RENDER || '').toLowerCase();
+  if (r === 'true' || r === '1') return true;
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_ENVIRONMENT_NAME) return true;
+  if (process.env.FLY_APP_NAME) return true;
+  return false;
+}
+
+const trimmedMongo =
+  process.env.MONGODB_URI != null ? String(process.env.MONGODB_URI).trim() : '';
+const MONGODB_URI =
+  trimmedMongo || (runsOnManagedHost() ? '' : 'mongodb://localhost:27017');
 const MONGODB_DB = process.env.MONGODB_DB || 'attendance';
 const MONGODB_COLLECTION =
   process.env.MONGODB_COLLECTION || 'attendance managment';
@@ -267,21 +278,32 @@ api.get('/health', (_req, res) => {
 app.use('/api', api);
 
 async function main() {
+  if (!MONGODB_URI) {
+    console.error(
+      '\n❌ MONGODB_URI is not set. Render (and similar hosts) have no local MongoDB.\n' +
+        '   In Render: Web Service → Environment → add MONGODB_URI (full Atlas SRV string).\n' +
+        '   Atlas: Network Access must allow your host (e.g. 0.0.0.0/0 for testing).\n'
+    );
+    process.exit(1);
+  }
   try {
     await mongoose.connect(MONGODB_URI, {
       dbName: MONGODB_DB,
-      serverSelectionTimeoutMS: 8000,
+      serverSelectionTimeoutMS: 20000,
     });
   } catch (err) {
     console.error('\n❌ MongoDB connection failed:', err.message);
-    console.error('   Fix: start MongoDB locally, or set MONGODB_URI in .env (see .env.example)');
-    console.error('   Compass: connect to mongodb://localhost:27017\n');
+    console.error(
+      '   Local: start MongoDB or set MONGODB_URI in .env. Render: set MONGODB_URI in Environment.'
+    );
+    console.error('   Atlas: allow network access from your deploy region; check user/password in the URI.\n');
     process.exit(1);
   }
   const safeUri = MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@');
   console.log(`MongoDB connected: ${safeUri} / db "${MONGODB_DB}" / collection "${MONGODB_COLLECTION}"`);
-  const server = app.listen(PORT, () => {
-    console.log(`API http://localhost:${PORT}/api/employees`);
+  const host = '0.0.0.0';
+  const server = app.listen(PORT, host, () => {
+    console.log(`API listening on ${host}:${PORT} (e.g. /api/health)`);
   });
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
