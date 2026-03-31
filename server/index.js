@@ -314,19 +314,25 @@ async function main() {
   const portEnv = process.env.PORT;
   const apiPortEnv = process.env.API_PORT;
   console.log(
-    '[startup] node=%s render=%s PORT=%s API_PORT=%s mongo_env_set=%s',
+    '[startup] node=%s render=%s PORT=%s API_PORT=%s mongo_env_set=%s final_port=%s',
     process.version,
     String(process.env.RENDER ?? ''),
     portEnv ?? '(unset)',
     apiPortEnv ?? '(unset)',
-    trimmedMongo ? 'yes' : 'no'
+    trimmedMongo ? 'yes' : 'no',
+    PORT
   );
+
+  if (runsOnManagedHost() && apiPortEnv && portEnv && apiPortEnv !== portEnv) {
+    console.log('[startup] WARNING: Both PORT and API_PORT are set on managed host. Remove API_PORT from environment.');
+  }
 
   if (!Number.isFinite(PORT) || PORT < 1 || PORT > 65535) {
     console.error('[startup] Invalid PORT after parse:', PORT, { PORT: portEnv, API_PORT: apiPortEnv });
     process.exit(1);
   }
 
+  console.log('[startup] Attempting MongoDB connection...');
   if (!MONGODB_URI) {
     console.error(
       '\n❌ MONGODB_URI is not set. Render (and similar hosts) have no local MongoDB.\n' +
@@ -337,10 +343,12 @@ async function main() {
     process.exit(1);
   }
   try {
+    console.log('[startup] Connecting to MongoDB...');
     await mongoose.connect(MONGODB_URI, {
       dbName: MONGODB_DB,
       serverSelectionTimeoutMS: 20000,
     });
+    console.log('[startup] MongoDB connection successful');
   } catch (err) {
     console.error('\n❌ MongoDB connection failed:', err && err.message ? err.message : err);
     if (err && err.stack) console.error(err.stack);
@@ -351,19 +359,28 @@ async function main() {
     process.exit(1);
   }
   const safeUri = MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@');
-  console.log(`MongoDB connected: ${safeUri} / db "${MONGODB_DB}" / collection "${MONGODB_COLLECTION}"`);
+  console.log(`[startup] MongoDB connected: ${safeUri} / db "${MONGODB_DB}" / collection "${MONGODB_COLLECTION}"`);
   const host = '0.0.0.0';
-  const server = app.listen(PORT, host, () => {
-    console.log(`API listening on ${host}:${PORT} (e.g. /api/health)`);
-  });
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`\n❌ Port ${PORT} is already in use. Stop the other app or set API_PORT in .env\n`);
-    } else {
-      console.error(err);
-    }
+  console.log(`[startup] Starting server on ${host}:${PORT}...`);
+  
+  try {
+    const server = app.listen(PORT, host, () => {
+      console.log(`[startup] ✅ API listening on ${host}:${PORT} (e.g. /api/health)`);
+    });
+    
+    server.on('error', (err) => {
+      console.error(`[startup] Server error:`, err);
+      if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use. On Render, this should not happen.`);
+      } else if (err.code === 'EACCES') {
+        console.error(`❌ Permission denied for port ${PORT}. On Render, use the PORT they provide.`);
+      }
+      process.exit(1);
+    });
+  } catch (err) {
+    console.error(`[startup] Failed to start server:`, err);
     process.exit(1);
-  });
+  }
 }
 
 main().catch((err) => {
