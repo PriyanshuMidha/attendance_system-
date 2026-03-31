@@ -1,139 +1,157 @@
-# Deploying the Attendance & Salary Management System
+# Deploy to Render (step-by-step)
 
-This project is **two parts**:
-
-1. **Backend** — Node.js + Express API (`server/index.js`) talking to **MongoDB Atlas**
-2. **Frontend** — Vite + React (static files after `npm run build`)
-
-You can host both on **[Render](https://render.com/)** (one **Web Service** + one **Static Site**). Alternatives like **Vercel** or **Netlify** only replace the **frontend**; the API still needs a Node host (Render, Railway, Fly.io, etc.).
+Your code is on GitHub: **[github.com/PriyanshuMidha/attendance_system-](https://github.com/PriyanshuMidha/attendance_system-)**  
+Deploy = **2 services on [Render](https://render.com/)** (API + static site) + **MongoDB Atlas** (database).
 
 ---
 
-## Prerequisites
+## Before you start (5 minutes)
 
-- Code pushed to **GitHub** (or GitLab / Bitbucket — Render supports them).
-- **MongoDB Atlas** cluster and connection string (`mongodb+srv://...`).
-- In Atlas → **Network Access**: allow **`0.0.0.0/0`** (or Render’s egress IPs) so the API can connect.
+1. **MongoDB Atlas**
+   - Cluster running, database user created.
+   - **Network Access** → add **`0.0.0.0/0`** (allow from anywhere) so Render can connect.  
+   - Copy **connection string** (`mongodb+srv://USER:PASSWORD@...`) from **Connect → Drivers**.
+
+2. **GitHub**
+   - Repo access from your Render account: sign in to Render with GitHub and authorize the org/user that owns `attendance_system-`.
+
+3. **Secrets**
+   - Do **not** put `.env` in GitHub. You will paste `MONGODB_URI` only in the Render dashboard.
 
 ---
 
-## Option A — Everything on Render (recommended for this repo)
+## Part 1 — Deploy the API (do this first)
 
-### Step 1: Deploy the API (Web Service)
+1. Go to [dashboard.render.com](https://dashboard.render.com) → **New +** → **Web Service**.
 
-1. Sign in at [render.com](https://render.com/) → **New +** → **Web Service**.
-2. Connect your repository and select this project.
-3. Configure:
+2. **Connect repository** → pick **`PriyanshuMidha/attendance_system-`** → branch **`main`**.
 
-   | Setting | Value |
+3. Fill in:
+
+   | Field | Value |
    |--------|--------|
    | **Name** | e.g. `attendance-api` |
-   | **Region** | Choose closest to users |
-   | **Branch** | `main` (or your default branch) |
-   | **Root directory** | *(leave empty — repo root)* |
-   | **Runtime** | `Node` |
-   | **Build command** | `npm install` |
-   | **Start command** | `npm start` |
+   | **Region** | closest to you |
+   | **Root Directory** | *(leave empty)* |
+   | **Runtime** | **Node** |
+   | **Build Command** | `npm install` |
+   | **Start Command** | `npm start` |
 
-4. Under **Environment**, add (use **your** real values):
+4. Open **Environment** (same screen, scroll down) and add:
 
-   | Key | Example / notes |
-   |-----|------------------|
-   | `MONGODB_URI` | Your Atlas SRV string |
+   | Key | Value |
+   |-----|--------|
+   | `MONGODB_URI` | Your full Atlas SRV string (include password; replace `<password>` if the URI template shows it). |
    | `MONGODB_DB` | `attendance` |
-   | `MONGODB_COLLECTION` | `attendance managment` (or your collection name) |
-   | `NODE_VERSION` | `20` (optional; set in **Environment** or use `.nvmrc`) |
+   | `MONGODB_COLLECTION` | `attendance managment` |
 
-   **Do not** set `API_PORT` on Render — the platform sets **`PORT`**; the server already uses `process.env.PORT`.
-
-5. **CORS** — After the frontend exists (Step 2), add:
+   Optional for now (add after Part 2):
 
    | Key | Value |
    |-----|--------|
-   | `CORS_ORIGIN` | Your static site URL, e.g. `https://attendance-web.onrender.com` |
+   | `CORS_ORIGIN` | `*` temporarily **or** your static site URL once you have it (see Part 2). |
 
-   Until the static URL exists, you can temporarily use `*` for testing only (not ideal for production).
+   **Do not** set `API_PORT` on Render — Render sets **`PORT`** automatically. If `API_PORT` is set here, the app used to listen on the wrong port and the deploy could fail; the server now prefers `PORT` on Render, but still remove `API_PORT` to avoid confusion.
 
-6. Create the service. Copy the API URL, e.g. `https://attendance-api.onrender.com`.
+5. Click **Create Web Service** and wait for deploy to finish (green “Live”).
 
-7. Quick check: open `https://YOUR-API.onrender.com/api/health` — you should see JSON with `"mongo": true` (if Atlas is reachable).
+6. **Copy your API URL** from the top of the service page, e.g.  
+   `https://attendance-api-xxxx.onrender.com`
 
-**Free tier:** the API may **spin down after idle**; first request after sleep can take ~30–60s.
+7. **Test in the browser:**  
+   `https://YOUR-API-URL.onrender.com/api/health`  
+   You should see JSON like `"mongo": true`. If `"mongo": false`, fix Atlas network access or `MONGODB_URI`.
+
+> **Free tier:** first request after idle can take **30–60 seconds** (cold start).
 
 ---
 
-### Step 2: Deploy the frontend (Static Site)
+## Part 2 — Deploy the website (static frontend)
 
-1. **New +** → **Static Site** → same repository.
-2. Configure:
+1. On Render → **New +** → **Static Site**.
 
-   | Setting | Value |
+2. Connect **the same repo** → **`attendance_system-`** → branch **`main`**.
+
+3. Fill in:
+
+   | Field | Value |
    |--------|--------|
-   | **Build command** | `npm install && npm run build` |
-   | **Publish directory** | `dist` |
+   | **Build Command** | `npm install && npm run build` |
+   | **Publish Directory** | `dist` |
 
-3. **Environment variables** (required **before** build — Vite bakes these in):
+4. **Environment** → add **before** the first build completes (Vite reads this at build time):
 
    | Key | Value |
    |-----|--------|
-   | `VITE_API_BASE` | `https://YOUR-API.onrender.com` — **no** trailing slash, **no** `/api` suffix |
+   | `VITE_API_BASE` | `https://YOUR-API-URL.onrender.com` |
 
-4. Deploy. Open the static URL and sign in (`admin` / `qwerty` for demo).
+   **Rules:** no trailing `/`, and **do not** add `/api` (the app adds `/api` itself).
 
-5. Go back to the **Web Service** and set **`CORS_ORIGIN`** to this static site URL exactly (scheme + host, no path). Redeploy the API if needed.
+5. **Create Static Site** and wait for build + deploy.
 
----
-
-### Step 3: Repo checklist before deploy
-
-- `.env` is **not** committed (it’s in `.gitignore`). Secrets go only in Render’s **Environment** UI.
-- `package.json` includes `"start": "node server/index.js"` for the API service.
+6. Open the **static site URL** Render shows (e.g. `https://attendance-system-xxxx.onrender.com`). Log in with **`admin`** / **`qwerty`**.
 
 ---
 
-## Option B — Frontend on Vercel / Netlify, API on Render
+## Part 3 — Fix CORS (if the site loads but data fails)
 
-Use this if you prefer Vercel’s CDN for the UI.
+1. Go back to the **Web Service** (API) → **Environment**.
 
-1. Deploy the **API** on Render exactly as in **Step 1** above.
-2. On **Vercel** (or Netlify): import the same repo, framework **Vite**, build `npm run build`, output `dist`.
-3. Set **`VITE_API_BASE`** = `https://YOUR-API.onrender.com` in the host’s environment (build-time for Vite).
-4. Set Render **`CORS_ORIGIN`** to your Vercel URL, e.g. `https://your-app.vercel.app`.
+2. Set **`CORS_ORIGIN`** to your **exact** static site origin, e.g.  
+   `https://attendance-system-xxxx.onrender.com`  
+   (same as the URL in the browser address bar, **no** path at the end).
+
+3. Remove `*` if you used it for testing.
+
+4. **Manual Deploy** → **Clear build cache & deploy** (or Save and let it redeploy).
+
+5. Hard-refresh the static site (Ctrl+Shift+R / Cmd+Shift+R).
 
 ---
 
-## Which should you use?
+## Quick checklist
 
-| Setup | Pros |
-|--------|------|
-| **Render Web + Render Static** | One vendor, simple billing, good for class projects |
-| **Vercel + Render API** | Very fast global static delivery; API stays on Render |
-
-Both are valid; **Render-only** is enough for most school/demo deployments.
+- [ ] Atlas allows `0.0.0.0/0` (or Render IPs)
+- [ ] Web Service: `npm install` / `npm start`, env has `MONGODB_URI`, `MONGODB_DB`, `MONGODB_COLLECTION`
+- [ ] `/api/health` shows `"mongo": true`
+- [ ] Static Site: `VITE_API_BASE` = API URL (no `/api`)
+- [ ] API `CORS_ORIGIN` = static site `https://...` URL
+- [ ] Login works on the live site
 
 ---
 
 ## Troubleshooting
 
-| Problem | What to check |
-|--------|----------------|
-| Frontend loads but data never appears | `VITE_API_BASE` wrong; rebuild static site after changing it. Browser **Network** tab: API calls should go to your Render API domain. |
-| CORS errors in the browser | `CORS_ORIGIN` on the API must **exactly** match the site origin (including `https://`). |
-| API `/api/health` shows `mongo: false` | Atlas **Network Access**, wrong `MONGODB_URI`, or user lacks DB permissions. |
-| 502 / connection refused | Web Service asleep (free tier) — wait and retry; or wrong **Start command** (`npm start`). |
+| What you see | What to do |
+|----------------|------------|
+| Deploy **Exited with status 1** on `npm start` | Open **Web Service → Logs** and scroll **above** the “Exited with status 1” line — that line is only a summary; the real error is a few lines up (look for **`[startup]`**, **`MONGODB_URI`**, or **`MongoDB connection failed`**). Typical fixes: add **`MONGODB_URI`** (Atlas `mongodb+srv://…`), Atlas **Network Access** `0.0.0.0/0`, URL-encode special characters in the DB password, remove **`API_PORT`** from Render env, and do not use a **localhost** Mongo URI on Render. |
+| Blank employees / network errors | Wrong `VITE_API_BASE` → fix env on **Static Site**, then **clear cache & redeploy** the static site. |
+| Browser console: CORS blocked | Set `CORS_ORIGIN` on the **API** to the static URL exactly. |
+| `/api/health` → `mongo: false` | Atlas IP allowlist, wrong password in URI, or user not allowed on DB. |
+| 502 / timeout on API | Cold start — wait ~1 minute and retry; check **Logs** on the Web Service. |
 
 ---
 
-## Security reminders (production)
+## Optional: frontend on Vercel instead
 
-- Change the demo login (**`admin` / `qwerty`**) to real authentication.
-- Rotate any database password that was ever shared in chat or committed.
-- Prefer **`CORS_ORIGIN`** = your real frontend URL instead of `*`.
+1. Deploy the API on Render (Part 1 only).
+2. [Vercel](https://vercel.com/) → New Project → import **`attendance_system-`**.
+3. Framework: **Vite**, Output: **`dist`**, Build: `npm run build`.
+4. Environment variable: **`VITE_API_BASE`** = your Render API URL.
+5. On Render API, set **`CORS_ORIGIN`** to your Vercel URL (e.g. `https://your-app.vercel.app`).
 
 ---
 
-## Reference
+## Security (production)
 
-- [Render Docs — Web Services](https://render.com/docs/web-services)  
-- [Render Docs — Static Sites](https://render.com/docs/static-sites)  
-- [MongoDB Atlas connection](https://www.mongodb.com/docs/atlas/getting-started/)
+- Replace demo login **`admin` / `qwerty`** with real auth before public use.
+- Never commit `.env`; rotate DB passwords if they were ever exposed.
+- Prefer a specific `CORS_ORIGIN` instead of `*`.
+
+---
+
+## Links
+
+- [Render — Web Services](https://render.com/docs/web-services)  
+- [Render — Static Sites](https://render.com/docs/static-sites)  
+- [MongoDB Atlas — Connect](https://www.mongodb.com/docs/atlas/getting-started/)

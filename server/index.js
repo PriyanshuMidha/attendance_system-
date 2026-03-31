@@ -332,7 +332,6 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('[startup] Attempting MongoDB connection...');
   if (!MONGODB_URI) {
     console.error(
       '\n❌ MONGODB_URI is not set. Render (and similar hosts) have no local MongoDB.\n' +
@@ -342,30 +341,30 @@ async function main() {
     );
     process.exit(1);
   }
-  try {
-    console.log('[startup] Connecting to MongoDB...');
-    await mongoose.connect(MONGODB_URI, {
-      dbName: MONGODB_DB,
-      serverSelectionTimeoutMS: 20000,
-    });
-    console.log('[startup] MongoDB connection successful');
-  } catch (err) {
-    console.error('\n❌ MongoDB connection failed:', err && err.message ? err.message : err);
-    if (err && err.stack) console.error(err.stack);
-    console.error(
-      '   Local: start MongoDB or set MONGODB_URI in .env. Render: set MONGODB_URI in Environment.'
-    );
-    console.error('   Atlas: allow network access from your deploy region; check user/password in the URI.\n');
-    process.exit(1);
-  }
-  const safeUri = MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@');
-  console.log(`[startup] MongoDB connected: ${safeUri} / db "${MONGODB_DB}" / collection "${MONGODB_COLLECTION}"`);
+
+  // Start HTTP server first so Render detects the port
   const host = '0.0.0.0';
   console.log(`[startup] Starting server on ${host}:${PORT}...`);
   
   try {
     const server = app.listen(PORT, host, () => {
       console.log(`[startup] ✅ API listening on ${host}:${PORT} (e.g. /api/health)`);
+      
+      // Connect to MongoDB after server starts
+      console.log('[startup] Attempting MongoDB connection...');
+      mongoose.connect(MONGODB_URI, {
+        dbName: MONGODB_DB,
+        serverSelectionTimeoutMS: 30000,
+        connectTimeoutMS: 30000,
+        socketTimeoutMS: 30000,
+      }).then(() => {
+        const safeUri = MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@');
+        console.log(`[startup] ✅ MongoDB connected: ${safeUri} / db "${MONGODB_DB}" / collection "${MONGODB_COLLECTION}"`);
+      }).catch((err) => {
+        console.error('\n❌ MongoDB connection failed:', err && err.message ? err.message : err);
+        console.error('   Atlas: check Network Access (0.0.0.0/0), Database Access (user permissions), and cluster status.');
+        console.error('   API will serve /health with mongo:false until connection succeeds.\n');
+      });
     });
     
     server.on('error', (err) => {
