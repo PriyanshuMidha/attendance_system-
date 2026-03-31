@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useCallback, ReactNode } fr
 
 const SESSION_KEY = 'attendance_app_auth';
 const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'qwerty';
+const ADMIN_PASSWORD = 'Plazer@123';
 
 interface AuthContextType {
   isAuthenticated: boolean;
