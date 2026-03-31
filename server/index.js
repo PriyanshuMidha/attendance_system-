@@ -20,14 +20,38 @@ function runsOnManagedHost() {
   return false;
 }
 
+function looksLikeLocalMongo(uri) {
+  if (!uri) return false;
+  const u = uri.toLowerCase();
+  return (
+    u.includes('localhost') ||
+    u.includes('127.0.0.1') ||
+    u.includes('0.0.0.0')
+  );
+}
+
 const trimmedMongo =
   process.env.MONGODB_URI != null ? String(process.env.MONGODB_URI).trim() : '';
-const MONGODB_URI =
+let MONGODB_URI =
   trimmedMongo || (runsOnManagedHost() ? '' : 'mongodb://localhost:27017');
+
+if (runsOnManagedHost() && MONGODB_URI && looksLikeLocalMongo(MONGODB_URI)) {
+  console.error(
+    '\n❌ MONGODB_URI points to localhost on a cloud host. That will never work.\n' +
+      '   Set MONGODB_URI in the dashboard to your Atlas mongodb+srv://… string.\n' +
+      '   Remove any committed .env that forces localhost.\n'
+  );
+  process.exit(1);
+}
 const MONGODB_DB = process.env.MONGODB_DB || 'attendance';
 const MONGODB_COLLECTION =
   process.env.MONGODB_COLLECTION || 'attendance managment';
-const PORT = Number(process.env.API_PORT || process.env.PORT || 3002);
+/** On Render, always listen on PORT; API_PORT in env would break the proxy if preferred. */
+const PORT = Number(
+  runsOnManagedHost()
+    ? process.env.PORT || process.env.API_PORT || 3002
+    : process.env.API_PORT || process.env.PORT || 3002
+);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || true;
 
 const holidaySchema = new mongoose.Schema(
@@ -277,12 +301,38 @@ api.get('/health', (_req, res) => {
 
 app.use('/api', api);
 
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+  process.exit(1);
+});
+
 async function main() {
+  const portEnv = process.env.PORT;
+  const apiPortEnv = process.env.API_PORT;
+  console.log(
+    '[startup] node=%s render=%s PORT=%s API_PORT=%s mongo_env_set=%s',
+    process.version,
+    String(process.env.RENDER ?? ''),
+    portEnv ?? '(unset)',
+    apiPortEnv ?? '(unset)',
+    trimmedMongo ? 'yes' : 'no'
+  );
+
+  if (!Number.isFinite(PORT) || PORT < 1 || PORT > 65535) {
+    console.error('[startup] Invalid PORT after parse:', PORT, { PORT: portEnv, API_PORT: apiPortEnv });
+    process.exit(1);
+  }
+
   if (!MONGODB_URI) {
     console.error(
       '\n❌ MONGODB_URI is not set. Render (and similar hosts) have no local MongoDB.\n' +
         '   In Render: Web Service → Environment → add MONGODB_URI (full Atlas SRV string).\n' +
-        '   Atlas: Network Access must allow your host (e.g. 0.0.0.0/0 for testing).\n'
+        '   Atlas: Network Access must allow your host (e.g. 0.0.0.0/0 for testing).\n' +
+        '   Scroll up in Logs for this line — the summary "Exited with status 1" hides the reason.\n'
     );
     process.exit(1);
   }
@@ -292,7 +342,8 @@ async function main() {
       serverSelectionTimeoutMS: 20000,
     });
   } catch (err) {
-    console.error('\n❌ MongoDB connection failed:', err.message);
+    console.error('\n❌ MongoDB connection failed:', err && err.message ? err.message : err);
+    if (err && err.stack) console.error(err.stack);
     console.error(
       '   Local: start MongoDB or set MONGODB_URI in .env. Render: set MONGODB_URI in Environment.'
     );
