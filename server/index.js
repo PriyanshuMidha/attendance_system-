@@ -327,10 +327,14 @@ async function main() {
     console.log('[startup] WARNING: Both PORT and API_PORT are set on managed host. Remove API_PORT from environment.');
   }
 
+  console.log('[startup] Environment check passed, proceeding to server startup...');
+
   if (!Number.isFinite(PORT) || PORT < 1 || PORT > 65535) {
     console.error('[startup] Invalid PORT after parse:', PORT, { PORT: portEnv, API_PORT: apiPortEnv });
+    console.error('[startup] PORT must be a valid number between 1-65535');
     process.exit(1);
   }
+  console.log('[startup] PORT validation passed:', PORT);
 
   if (!MONGODB_URI) {
     console.error(
@@ -341,14 +345,23 @@ async function main() {
     );
     process.exit(1);
   }
+  console.log('[startup] MONGODB_URI validation passed');
 
   // Start HTTP server first so Render detects the port
   const host = '0.0.0.0';
   console.log(`[startup] Starting server on ${host}:${PORT}...`);
   
+  // Add timeout to ensure server starts within reasonable time
+  const startupTimeout = setTimeout(() => {
+    console.error('[startup] ❌ Server startup timeout after 30 seconds');
+    process.exit(1);
+  }, 30000);
+  
   try {
     const server = app.listen(PORT, host, () => {
+      clearTimeout(startupTimeout);
       console.log(`[startup] ✅ API listening on ${host}:${PORT} (e.g. /api/health)`);
+      console.log(`[startup] Server startup completed successfully`);
       
       // Connect to MongoDB after server starts
       console.log('[startup] Attempting MongoDB connection...');
