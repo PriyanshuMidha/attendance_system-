@@ -59,6 +59,8 @@ const holidaySchema = new mongoose.Schema(
     date: { type: String, required: true },
     month: { type: Number, required: true },
     year: { type: Number, required: true },
+    /** When true, leave is recorded but does not reduce salary (paid leave / holiday). */
+    excludeFromDeduction: { type: Boolean, default: false },
   },
   { _id: false }
 );
@@ -107,11 +109,17 @@ function toEmployee(doc) {
   }
   const id = o._id.toString ? o._id.toString() : String(o._id);
   const holidays = Array.isArray(o.holidays)
-    ? o.holidays.map((h) => ({
-        date: String(h?.date ?? ''),
-        month: Number(h?.month) || 0,
-        year: Number(h?.year) || 0,
-      }))
+    ? o.holidays.map((h) => {
+        const base = {
+          date: String(h?.date ?? ''),
+          month: Number(h?.month) || 0,
+          year: Number(h?.year) || 0,
+        };
+        if (h?.excludeFromDeduction === true) {
+          return { ...base, excludeFromDeduction: true };
+        }
+        return base;
+      })
     : [];
   return {
     id,
@@ -251,17 +259,45 @@ api.post('/employees/:id/holidays', async (req, res) => {
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ error: 'Invalid id' });
     }
-    const { date, month, year } = req.body;
+    const { date, month, year, excludeFromDeduction } = req.body;
     if (date == null || month == null || year == null) {
       return res.status(400).json({ error: 'date, month, year required' });
     }
-    const holiday = { date, month: Number(month), year: Number(year) };
+    const holiday = {
+      date,
+      month: Number(month),
+      year: Number(year),
+      ...(excludeFromDeduction === true ? { excludeFromDeduction: true } : {}),
+    };
     const emp = await findActiveEmployee(id);
     if (!emp) return res.status(404).json({ error: 'Not found' });
     if (emp.holidays.some((h) => h.date === holiday.date)) {
       return res.json(toEmployee(emp));
     }
     emp.holidays.push(holiday);
+    await emp.save();
+    res.json(toEmployee(emp));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+api.patch('/employees/:id/holidays/:date', async (req, res) => {
+  try {
+    const { id, date } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
+    const decodedDate = decodeURIComponent(date);
+    const emp = await findActiveEmployee(id);
+    if (!emp) return res.status(404).json({ error: 'Not found' });
+    const h = emp.holidays.find((x) => x.date === decodedDate);
+    if (!h) return res.status(404).json({ error: 'Leave not found' });
+    if ('excludeFromDeduction' in req.body) {
+      h.excludeFromDeduction = Boolean(req.body.excludeFromDeduction);
+    }
+    emp.markModified('holidays');
     await emp.save();
     res.json(toEmployee(emp));
   } catch (e) {

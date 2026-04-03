@@ -1,6 +1,7 @@
 import { Navigate } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { EmployeeProvider } from '../context/EmployeeContext';
+import { ViewMonthProvider } from '../context/ViewMonthContext';
 import { Layout } from './Layout';
 
 /** Auth gate + employee data scope + main shell with nav. */
@@ -13,7 +14,9 @@ export const ProtectedLayout = () => {
 
   return (
     <EmployeeProvider>
-      <Layout />
+      <ViewMonthProvider>
+        <Layout />
+      </ViewMonthProvider>
     </EmployeeProvider>
   );
 };

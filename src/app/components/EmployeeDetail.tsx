@@ -1,6 +1,12 @@
 import { useState, useEffect, type ChangeEvent, type FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { useEmployees, holidayFromDateInput, type EmployeeUpdate } from '../context/EmployeeContext';
+import {
+  useEmployees,
+  holidayFromDateInput,
+  consecutiveHolidaysFrom,
+  type EmployeeUpdate,
+} from '../context/EmployeeContext';
+import { useViewMonth, firstDayOfMonthIso } from '../context/ViewMonthContext';
 import {
   ArrowLeft,
   Calendar,
@@ -41,13 +47,23 @@ const MONTH_OPTIONS = [
 export const EmployeeDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getEmployee, addHoliday, removeHoliday, calculateSalary, updateEmployee, deleteEmployee } =
-    useEmployees();
+  const {
+    getEmployee,
+    addHoliday,
+    removeHoliday,
+    patchHoliday,
+    calculateSalary,
+    updateEmployee,
+    deleteEmployee,
+  } = useEmployees();
+  const { month: viewMonth, year: viewYear, setViewMonthYear } = useViewMonth();
 
   const [newHoliday, setNewHoliday] = useState('');
+  const [newHolidayDayCount, setNewHolidayDayCount] = useState('1');
+  const [newLeaveHolidayNoDeduction, setNewLeaveHolidayNoDeduction] = useState(false);
   const [showAddHoliday, setShowAddHoliday] = useState(false);
-  const [holidayMonth, setHolidayMonth] = useState(() => new Date().getMonth() + 1);
-  const [holidayYear, setHolidayYear] = useState(() => new Date().getFullYear());
+  const [holidayMonth, setHolidayMonth] = useState(() => viewMonth);
+  const [holidayYear, setHolidayYear] = useState(() => viewYear);
   const [editingLeaveDate, setEditingLeaveDate] = useState<string | null>(null);
   const [editLeaveDateInput, setEditLeaveDateInput] = useState('');
 
@@ -60,6 +76,11 @@ export const EmployeeDetail = () => {
   const [removeAadhar, setRemoveAadhar] = useState(false);
 
   const employee = getEmployee(id!);
+
+  useEffect(() => {
+    setHolidayMonth(viewMonth);
+    setHolidayYear(viewYear);
+  }, [viewMonth, viewYear]);
 
   useEffect(() => {
     if (!employee || isEditing) return;
@@ -164,19 +185,16 @@ export const EmployeeDetail = () => {
     }
   };
 
-  const currentDate = new Date();
-  const currentMonth = currentDate.getMonth() + 1;
-  const currentYear = currentDate.getFullYear();
-
-  const currentMonthSalary = calculateSalary(employee, currentMonth, currentYear);
+  const currentMonthSalary = calculateSalary(employee, viewMonth, viewYear);
+  const payrollMonthLabel = MONTH_OPTIONS.find((m) => m.value === viewMonth)?.label ?? '';
 
   const monthlyAnalysis = Array.from({ length: 12 }, (_, i) => {
     const month = i + 1;
     const monthHolidays = employee.holidays.filter(
-      (h) => h.month === month && h.year === currentYear
+      (h) => h.month === month && h.year === viewYear
     ).length;
     return {
-      month: new Date(currentYear, i).toLocaleString('en-US', { month: 'short' }),
+      month: new Date(viewYear, i).toLocaleString('en-US', { month: 'short' }),
       holidays: monthHolidays,
     };
   });
@@ -194,10 +212,22 @@ export const EmployeeDetail = () => {
       alert('Please select a date');
       return;
     }
+    const count = Math.max(1, parseInt(newHolidayDayCount, 10) || 1);
+    const days = consecutiveHolidaysFrom(newHoliday, count, {
+      excludeFromDeduction: newLeaveHolidayNoDeduction,
+    });
+    if (days.length === 0) {
+      alert('Invalid start date');
+      return;
+    }
 
     try {
-      await addHoliday(employee.id, holidayFromDateInput(newHoliday));
+      for (const h of days) {
+        await addHoliday(employee.id, h);
+      }
       setNewHoliday('');
+      setNewHolidayDayCount('1');
+      setNewLeaveHolidayNoDeduction(false);
       setShowAddHoliday(false);
     } catch {
       /* error shown in layout */
@@ -239,8 +269,12 @@ export const EmployeeDetail = () => {
     }
     try {
       if (editLeaveDateInput !== editingLeaveDate) {
+        const prev = employee.holidays.find((h) => h.date === editingLeaveDate);
         await removeHoliday(employee.id, editingLeaveDate);
-        await addHoliday(employee.id, next);
+        await addHoliday(employee.id, {
+          ...next,
+          ...(prev?.excludeFromDeduction ? { excludeFromDeduction: true } : {}),
+        });
       }
       setEditingLeaveDate(null);
       setEditLeaveDateInput('');
@@ -425,6 +459,11 @@ export const EmployeeDetail = () => {
 
           {!isEditing && (
             <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
+              <div className="col-span-2 pb-2 border-b border-gray-200 mb-1">
+                <p className="text-xs text-gray-500">
+                  Payroll view: {payrollMonthLabel} {viewYear} (matches dashboard month)
+                </p>
+              </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Base Salary</p>
                 <p className="text-xl text-gray-900">₹{currentMonthSalary.baseSalary.toLocaleString()}</p>
@@ -458,7 +497,14 @@ export const EmployeeDetail = () => {
             <h3 className="text-lg text-gray-900">Leaves / absences</h3>
             <button
               type="button"
-              onClick={() => setShowAddHoliday(!showAddHoliday)}
+              onClick={() => {
+                if (!showAddHoliday) {
+                  setNewHoliday(firstDayOfMonthIso(viewYear, viewMonth));
+                  setNewHolidayDayCount('1');
+                  setNewLeaveHolidayNoDeduction(false);
+                }
+                setShowAddHoliday(!showAddHoliday);
+              }}
               className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"
               title="Add leave"
             >
@@ -475,7 +521,9 @@ export const EmployeeDetail = () => {
               <select
                 value={holidayMonth}
                 onChange={(e) => {
-                  setHolidayMonth(Number(e.target.value));
+                  const m = Number(e.target.value);
+                  setHolidayMonth(m);
+                  setViewMonthYear(m, holidayYear);
                   setEditingLeaveDate(null);
                   setEditLeaveDateInput('');
                 }}
@@ -493,7 +541,9 @@ export const EmployeeDetail = () => {
               <select
                 value={holidayYear}
                 onChange={(e) => {
-                  setHolidayYear(Number(e.target.value));
+                  const y = Number(e.target.value);
+                  setHolidayYear(y);
+                  setViewMonthYear(holidayMonth, y);
                   setEditingLeaveDate(null);
                   setEditLeaveDateInput('');
                 }}
@@ -510,13 +560,36 @@ export const EmployeeDetail = () => {
 
           {showAddHoliday && (
             <div className="mb-4 p-3 bg-gray-50 rounded-lg space-y-2">
-              <p className="text-xs text-gray-600">Pick the absence date (any month/year)</p>
+              <p className="text-xs text-gray-600">
+                Start date and number of days add consecutive entries. Use &quot;Leave holiday&quot; for paid /
+                non-deducting leave.
+              </p>
               <input
                 type="date"
                 value={newHoliday}
                 onChange={(e) => setNewHoliday(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Number of days</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={newHolidayDayCount}
+                  onChange={(e) => setNewHolidayDayCount(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newLeaveHolidayNoDeduction}
+                  onChange={(e) => setNewLeaveHolidayNoDeduction(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Leave holiday (no salary deduction)
+              </label>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -530,6 +603,8 @@ export const EmployeeDetail = () => {
                   onClick={() => {
                     setShowAddHoliday(false);
                     setNewHoliday('');
+                    setNewHolidayDayCount('1');
+                    setNewLeaveHolidayNoDeduction(false);
                   }}
                   className="flex-1 px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300"
                 >
@@ -568,6 +643,7 @@ export const EmployeeDetail = () => {
                     </div>
                   </>
                 ) : (
+                  <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-sm text-gray-900">{formatHolidayLabel(holiday.date)}</span>
                     <div className="flex items-center gap-1 shrink-0">
@@ -589,6 +665,22 @@ export const EmployeeDetail = () => {
                       </button>
                     </div>
                   </div>
+                  <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!holiday.excludeFromDeduction}
+                      onChange={(e) => {
+                        patchHoliday(employee.id, holiday.date, {
+                          excludeFromDeduction: e.target.checked,
+                        }).catch(() => {
+                          /* error shown in layout */
+                        });
+                      }}
+                      className="rounded border-gray-300"
+                    />
+                    Leave holiday (no salary deduction)
+                  </label>
+                  </div>
                 )}
               </div>
             ))}
@@ -605,7 +697,7 @@ export const EmployeeDetail = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h3 className="text-lg text-gray-900 mb-4">Monthly Holiday Analysis ({currentYear})</h3>
+          <h3 className="text-lg text-gray-900 mb-4">Monthly Holiday Analysis ({viewYear})</h3>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={monthlyAnalysis}>
               <CartesianGrid strokeDasharray="3 3" />

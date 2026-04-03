@@ -5,20 +5,52 @@ export interface Holiday {
   date: string;
   month: number;
   year: number;
+  /** Paid / calendar leave: recorded but not counted toward salary deduction */
+  excludeFromDeduction?: boolean;
 }
 
 /** Parse `<input type="date">` value (YYYY-MM-DD) so month/year are not shifted by UTC. */
-export function holidayFromDateInput(isoDate: string): Holiday {
+export function holidayFromDateInput(isoDate: string, opts?: { excludeFromDeduction?: boolean }): Holiday {
   const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(isoDate);
+  let base: Holiday;
   if (m) {
-    return { date: isoDate, month: Number(m[2]), year: Number(m[1]) };
+    base = { date: isoDate, month: Number(m[2]), year: Number(m[1]) };
+  } else {
+    const d = new Date(isoDate);
+    base = {
+      date: isoDate,
+      month: d.getMonth() + 1,
+      year: d.getFullYear(),
+    };
   }
-  const d = new Date(isoDate);
-  return {
-    date: isoDate,
-    month: d.getMonth() + 1,
-    year: d.getFullYear(),
-  };
+  if (opts?.excludeFromDeduction) {
+    return { ...base, excludeFromDeduction: true };
+  }
+  return base;
+}
+
+/** Consecutive calendar days starting at `isoDate` (YYYY-MM-DD), local calendar semantics. */
+export function consecutiveHolidaysFrom(
+  isoDate: string,
+  count: number,
+  opts?: { excludeFromDeduction?: boolean }
+): Holiday[] {
+  const n = Math.min(365, Math.max(1, Math.floor(Number(count)) || 1));
+  const parts = isoDate.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((x) => Number.isNaN(x))) return [];
+  const [ys, ms, ds] = parts;
+  const cur = new Date(ys, ms - 1, ds);
+  if (Number.isNaN(cur.getTime())) return [];
+  const out: Holiday[] = [];
+  for (let i = 0; i < n; i++) {
+    const y = cur.getFullYear();
+    const mo = cur.getMonth() + 1;
+    const d = cur.getDate();
+    const date = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    out.push(holidayFromDateInput(date, opts));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
 }
 
 export interface Employee {
@@ -45,6 +77,7 @@ interface EmployeeContextType {
   deleteEmployee: (id: string) => Promise<void>;
   addHoliday: (id: string, holiday: Holiday) => Promise<void>;
   removeHoliday: (id: string, date: string) => Promise<void>;
+  patchHoliday: (id: string, date: string, patch: { excludeFromDeduction: boolean }) => Promise<void>;
   getEmployee: (id: string) => Employee | undefined;
   calculateSalary: (employee: Employee, month?: number, year?: number) => {
     baseSalary: number;
@@ -99,6 +132,12 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
   ) => {
     setError(null);
     try {
+      const holidaysPayload = (employee.holidays || []).map((h) => ({
+        date: h.date,
+        month: h.month,
+        year: h.year,
+        ...(h.excludeFromDeduction ? { excludeFromDeduction: true } : {}),
+      }));
       const created = await apiFetch<Employee>('/employees', {
         method: 'POST',
         body: JSON.stringify({
@@ -107,7 +146,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
           salary: employee.salary,
           aadharPhoto: employee.aadharPhoto,
           dateOfJoining: employee.dateOfJoining,
-          holidays: employee.holidays || [],
+          holidays: holidaysPayload,
         }),
       });
       setEmployees((prev) => [...prev, created]);
@@ -156,13 +195,35 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
   const addHoliday = async (id: string, holiday: Holiday) => {
     setError(null);
     try {
+      const body: Record<string, unknown> = {
+        date: holiday.date,
+        month: holiday.month,
+        year: holiday.year,
+      };
+      if (holiday.excludeFromDeduction) body.excludeFromDeduction = true;
       const updated = await apiFetch<Employee>(`/employees/${id}/holidays`, {
         method: 'POST',
-        body: JSON.stringify(holiday),
+        body: JSON.stringify(body),
       });
       setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to add holiday';
+      setError(msg);
+      throw e;
+    }
+  };
+
+  const patchHoliday = async (id: string, date: string, patch: { excludeFromDeduction: boolean }) => {
+    setError(null);
+    try {
+      const enc = encodeURIComponent(date);
+      const updated = await apiFetch<Employee>(`/employees/${id}/holidays/${enc}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to update leave';
       setError(msg);
       throw e;
     }
@@ -190,9 +251,10 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
     const targetMonth = month ?? currentDate.getMonth() + 1;
     const targetYear = year ?? currentDate.getFullYear();
 
-    const monthHolidays = employee.holidays.filter(
+    const monthLeaves = employee.holidays.filter(
       (h) => h.month === targetMonth && h.year === targetYear
     );
+    const monthHolidays = monthLeaves.filter((h) => !h.excludeFromDeduction);
 
     const absentDays = monthHolidays.length;
     const dailyRate = employee.salary / 30;
@@ -230,6 +292,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
         deleteEmployee,
         addHoliday,
         removeHoliday,
+        patchHoliday,
         getEmployee,
         calculateSalary,
       }}
