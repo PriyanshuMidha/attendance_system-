@@ -53,6 +53,8 @@ export function consecutiveHolidaysFrom(
   return out;
 }
 
+export type MonthDaysOnTimeEntry = { month: number; year: number; daysOnTime: number };
+
 export interface Employee {
   id: string;
   name: string;
@@ -62,6 +64,8 @@ export interface Employee {
   aadharPhoto?: string;
   dateOfJoining?: string;
   holidays: Holiday[];
+  /** Per-month display override; does not affect deduction / final salary */
+  monthlyDaysOnTime?: MonthDaysOnTimeEntry[];
 }
 
 /** PATCH body: use `aadharPhoto: null` to clear the image in MongoDB. */
@@ -78,6 +82,12 @@ interface EmployeeContextType {
   addHoliday: (id: string, holiday: Holiday) => Promise<void>;
   removeHoliday: (id: string, date: string) => Promise<void>;
   patchHoliday: (id: string, date: string, patch: { excludeFromDeduction: boolean }) => Promise<void>;
+  patchMonthDaysOnTime: (
+    id: string,
+    month: number,
+    year: number,
+    payload: { daysOnTime: number } | { clear: true }
+  ) => Promise<void>;
   getEmployee: (id: string) => Employee | undefined;
   calculateSalary: (employee: Employee, month?: number, year?: number) => {
     baseSalary: number;
@@ -244,6 +254,30 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
     }
   };
 
+  const patchMonthDaysOnTime = async (
+    id: string,
+    month: number,
+    year: number,
+    payload: { daysOnTime: number } | { clear: true }
+  ) => {
+    setError(null);
+    try {
+      const body =
+        'clear' in payload && payload.clear
+          ? { month, year, clear: true }
+          : { month, year, daysOnTime: (payload as { daysOnTime: number }).daysOnTime };
+      const updated = await apiFetch<Employee>(`/employees/${id}/month-days-on-time`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+      setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to update days on time';
+      setError(msg);
+      throw e;
+    }
+  };
+
   const getEmployee = (id: string) => employees.find((emp) => emp.id === id);
 
   const calculateSalary = (employee: Employee, month?: number, year?: number) => {
@@ -254,20 +288,28 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
     const monthLeaves = employee.holidays.filter(
       (h) => h.month === targetMonth && h.year === targetYear
     );
-    const monthHolidays = monthLeaves.filter((h) => !h.excludeFromDeduction);
+    const totalLeaveDays = monthLeaves.length;
+    const absentDays = totalLeaveDays;
+    const deductibleLeaveDays = monthLeaves.filter((h) => !h.excludeFromDeduction).length;
 
-    const absentDays = monthHolidays.length;
     const dailyRate = employee.salary / 30;
 
     let deduction = 0;
-    if (absentDays > 0) {
-      const firstTwoDays = Math.min(absentDays, 2);
-      const remainingDays = Math.max(0, absentDays - 2);
+    if (deductibleLeaveDays > 0) {
+      const firstTwoDays = Math.min(deductibleLeaveDays, 2);
+      const remainingDays = Math.max(0, deductibleLeaveDays - 2);
 
       deduction = firstTwoDays * dailyRate * 0.5 + remainingDays * dailyRate;
     }
 
-    const daysOnTime = 30 - absentDays;
+    const computedDaysOnTime = 30 - totalLeaveDays;
+    const dotOverride = employee.monthlyDaysOnTime?.find(
+      (e) => e.month === targetMonth && e.year === targetYear
+    );
+    const daysOnTime =
+      dotOverride != null && Number.isFinite(dotOverride.daysOnTime)
+        ? Math.min(30, Math.max(0, Math.round(dotOverride.daysOnTime)))
+        : computedDaysOnTime;
     const finalSalary = employee.salary - deduction;
 
     return {
@@ -293,6 +335,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
         addHoliday,
         removeHoliday,
         patchHoliday,
+        patchMonthDaysOnTime,
         getEmployee,
         calculateSalary,
       }}

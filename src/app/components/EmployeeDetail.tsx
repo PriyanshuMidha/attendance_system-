@@ -19,6 +19,7 @@ import {
   UserX,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { formatInr } from '../../lib/formatInr';
 
 function formatHolidayLabel(isoDate: string) {
   const [y, m, d] = isoDate.split('-').map(Number);
@@ -52,6 +53,7 @@ export const EmployeeDetail = () => {
     addHoliday,
     removeHoliday,
     patchHoliday,
+    patchMonthDaysOnTime,
     calculateSalary,
     updateEmployee,
     deleteEmployee,
@@ -74,8 +76,36 @@ export const EmployeeDetail = () => {
   const [editDateOfJoining, setEditDateOfJoining] = useState('');
   const [editAadharPhoto, setEditAadharPhoto] = useState<string | undefined>(undefined);
   const [removeAadhar, setRemoveAadhar] = useState(false);
+  const [daysOnTimeDraft, setDaysOnTimeDraft] = useState('');
 
   const employee = getEmployee(id!);
+
+  const leaveKeyForView =
+    employee?.holidays
+      .filter((h) => h.month === viewMonth && h.year === viewYear)
+      .map((h) => `${h.date}:${h.excludeFromDeduction ? 1 : 0}`)
+      .join('|') ?? '';
+  const daysOnTimeStoreKey =
+    employee?.monthlyDaysOnTime
+      ?.map((e) => `${e.month}-${e.year}-${e.daysOnTime}`)
+      .sort()
+      .join('|') ?? '';
+
+  useEffect(() => {
+    if (!employee) return;
+    const totalLeave = employee.holidays.filter(
+      (h) => h.month === viewMonth && h.year === viewYear
+    ).length;
+    const computed = 30 - totalLeave;
+    const o = employee.monthlyDaysOnTime?.find(
+      (e) => e.month === viewMonth && e.year === viewYear
+    );
+    const shown =
+      o != null && Number.isFinite(o.daysOnTime)
+        ? Math.min(30, Math.max(0, Math.round(o.daysOnTime)))
+        : computed;
+    setDaysOnTimeDraft(String(shown));
+  }, [employee, viewMonth, viewYear, leaveKeyForView, daysOnTimeStoreKey]);
 
   useEffect(() => {
     setHolidayMonth(viewMonth);
@@ -187,6 +217,35 @@ export const EmployeeDetail = () => {
 
   const currentMonthSalary = calculateSalary(employee, viewMonth, viewYear);
   const payrollMonthLabel = MONTH_OPTIONS.find((m) => m.value === viewMonth)?.label ?? '';
+
+  const totalLeavesInView = employee.holidays.filter(
+    (h) => h.month === viewMonth && h.year === viewYear
+  ).length;
+  const computedDaysOnTime = 30 - totalLeavesInView;
+  const hasDaysOverride = Boolean(
+    employee.monthlyDaysOnTime?.some((e) => e.month === viewMonth && e.year === viewYear)
+  );
+
+  const handleSaveDaysOnTime = async () => {
+    const n = parseInt(daysOnTimeDraft, 10);
+    if (Number.isNaN(n) || n < 0 || n > 30) {
+      alert('Enter days on time between 0 and 30');
+      return;
+    }
+    try {
+      await patchMonthDaysOnTime(employee.id, viewMonth, viewYear, { daysOnTime: n });
+    } catch {
+      /* error shown in layout */
+    }
+  };
+
+  const handleResetDaysOnTime = async () => {
+    try {
+      await patchMonthDaysOnTime(employee.id, viewMonth, viewYear, { clear: true });
+    } catch {
+      /* error shown in layout */
+    }
+  };
 
   const monthlyAnalysis = Array.from({ length: 12 }, (_, i) => {
     const month = i + 1;
@@ -466,11 +525,11 @@ export const EmployeeDetail = () => {
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Base Salary</p>
-                <p className="text-xl text-gray-900">₹{currentMonthSalary.baseSalary.toLocaleString()}</p>
+                <p className="text-xl text-gray-900">₹{formatInr(currentMonthSalary.baseSalary)}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Final Salary</p>
-                <p className="text-xl text-green-600">₹{currentMonthSalary.finalSalary.toLocaleString()}</p>
+                <p className="text-xl text-green-600">₹{formatInr(currentMonthSalary.finalSalary)}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Absent Days</p>
@@ -478,15 +537,44 @@ export const EmployeeDetail = () => {
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Days On Time</p>
-                <p className="text-xl text-green-600">{currentMonthSalary.daysOnTime}</p>
+                <p className="text-xs text-gray-500 mb-2">
+                  From leaves (30 − leave days): {computedDaysOnTime}
+                  {hasDaysOverride ? ' · saved override' : ''}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={30}
+                    value={daysOnTimeDraft}
+                    onChange={(e) => setDaysOnTimeDraft(e.target.value)}
+                    className="w-24 px-2 py-1.5 border border-gray-300 rounded-lg text-xl text-green-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveDaysOnTime()}
+                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    Save
+                  </button>
+                  {hasDaysOverride && (
+                    <button
+                      type="button"
+                      onClick={() => void handleResetDaysOnTime()}
+                      className="px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                    >
+                      Reset to calculated
+                    </button>
+                  )}
+                </div>
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Daily Rate</p>
-                <p className="text-lg text-gray-900">₹{currentMonthSalary.dailyRate}</p>
+                <p className="text-lg text-gray-900">₹{formatInr(currentMonthSalary.dailyRate)}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Deduction</p>
-                <p className="text-lg text-red-600">-₹{currentMonthSalary.deduction.toLocaleString()}</p>
+                <p className="text-lg text-red-600">-₹{formatInr(currentMonthSalary.deduction)}</p>
               </div>
             </div>
           )}

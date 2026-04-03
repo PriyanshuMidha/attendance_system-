@@ -6,6 +6,7 @@ import {
 } from '../context/EmployeeContext';
 import { useViewMonth, firstDayOfMonthIso } from '../context/ViewMonthContext';
 import { Calendar, Plus, UserCircle } from 'lucide-react';
+import { formatInr } from '../../lib/formatInr';
 
 const MONTH_OPTIONS = [
   { value: 1, label: 'January' },
@@ -23,13 +24,14 @@ const MONTH_OPTIONS = [
 ];
 
 export const Dashboard = () => {
-  const { employees, loading, addHoliday, calculateSalary } = useEmployees();
+  const { employees, loading, addHoliday, calculateSalary, patchMonthDaysOnTime } = useEmployees();
   const { month: viewMonth, year: viewYear, setViewMonthYear } = useViewMonth();
   const navigate = useNavigate();
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
   const [holidayDate, setHolidayDate] = useState('');
   const [holidayDayCount, setHolidayDayCount] = useState('1');
   const [leaveHolidayNoDeduction, setLeaveHolidayNoDeduction] = useState(false);
+  const [daysOnTimeDraft, setDaysOnTimeDraft] = useState('');
 
   const yearNow = new Date().getFullYear();
   const yearOptions = Array.from({ length: 14 }, (_, i) => yearNow + 1 - i);
@@ -38,6 +40,59 @@ export const Dashboard = () => {
     if (!selectedEmployee) return;
     setHolidayDate(firstDayOfMonthIso(viewYear, viewMonth));
   }, [viewMonth, viewYear, selectedEmployee]);
+
+  const selectedEmp = selectedEmployee
+    ? employees.find((e) => e.id === selectedEmployee)
+    : undefined;
+  const selectedLeaveKey =
+    selectedEmp?.holidays
+      .filter((h) => h.month === viewMonth && h.year === viewYear)
+      .map((h) => `${h.date}:${h.excludeFromDeduction ? 1 : 0}`)
+      .join('|') ?? '';
+  const selectedDotKey =
+    selectedEmp?.monthlyDaysOnTime
+      ?.map((e) => `${e.month}-${e.year}-${e.daysOnTime}`)
+      .sort()
+      .join('|') ?? '';
+
+  useEffect(() => {
+    if (!selectedEmployee) return;
+    const emp = employees.find((e) => e.id === selectedEmployee);
+    if (!emp) return;
+    const totalLeave = emp.holidays.filter(
+      (h) => h.month === viewMonth && h.year === viewYear
+    ).length;
+    const computed = 30 - totalLeave;
+    const o = emp.monthlyDaysOnTime?.find(
+      (e) => e.month === viewMonth && e.year === viewYear
+    );
+    const shown =
+      o != null && Number.isFinite(o.daysOnTime)
+        ? Math.min(30, Math.max(0, Math.round(o.daysOnTime)))
+        : computed;
+    setDaysOnTimeDraft(String(shown));
+  }, [selectedEmployee, employees, viewMonth, viewYear, selectedLeaveKey, selectedDotKey]);
+
+  const handleSaveDaysOnTime = async (employeeId: string) => {
+    const n = parseInt(daysOnTimeDraft, 10);
+    if (Number.isNaN(n) || n < 0 || n > 30) {
+      alert('Enter days on time between 0 and 30');
+      return;
+    }
+    try {
+      await patchMonthDaysOnTime(employeeId, viewMonth, viewYear, { daysOnTime: n });
+    } catch {
+      /* error shown in layout */
+    }
+  };
+
+  const handleResetDaysOnTime = async (employeeId: string) => {
+    try {
+      await patchMonthDaysOnTime(employeeId, viewMonth, viewYear, { clear: true });
+    } catch {
+      /* error shown in layout */
+    }
+  };
 
   const handleAddHoliday = async (employeeId: string) => {
     if (!holidayDate) {
@@ -157,22 +212,65 @@ export const Dashboard = () => {
 
                   <div className="space-y-2 mb-4">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Absent Days (payroll):</span>
-                      <span className="text-sm text-red-600">{salaryData.absentDays}</span>
+                      <span className="text-sm text-gray-600">Absent Days:</span>
+                      <span className="text-xl text-red-600">{salaryData.absentDays}</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-sm text-gray-600">Days On Time:</span>
-                      <span className="text-sm text-green-600">{salaryData.daysOnTime}</span>
+                      <span className="text-xl text-green-600">{salaryData.daysOnTime}</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-sm text-gray-600">Salary ({payrollLabel}):</span>
-                      <span className="text-base text-gray-900">₹{salaryData.finalSalary.toLocaleString()}</span>
+                      <span className="text-base text-gray-900">₹{formatInr(salaryData.finalSalary)}</span>
                     </div>
                   </div>
                 </div>
 
                 {selectedEmployee === employee.id ? (
                   <div className="space-y-3 pt-4 border-t border-gray-200">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
+                      <p className="text-xs font-medium text-gray-700">Days on time ({payrollLabel})</p>
+                      <p className="text-xs text-gray-500">
+                        Display only — salary still follows holidays. Calculated:{' '}
+                        {30 -
+                          employee.holidays.filter(
+                            (h) => h.month === viewMonth && h.year === viewYear
+                          ).length}
+                        {employee.monthlyDaysOnTime?.some(
+                          (e) => e.month === viewMonth && e.year === viewYear
+                        )
+                          ? ' · override saved'
+                          : ''}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          max={30}
+                          value={daysOnTimeDraft}
+                          onChange={(e) => setDaysOnTimeDraft(e.target.value)}
+                          className="w-20 px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-green-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveDaysOnTime(employee.id)}
+                          className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                        >
+                          Save
+                        </button>
+                        {employee.monthlyDaysOnTime?.some(
+                          (e) => e.month === viewMonth && e.year === viewYear
+                        ) && (
+                          <button
+                            type="button"
+                            onClick={() => void handleResetDaysOnTime(employee.id)}
+                            className="px-3 py-1.5 text-xs border border-gray-300 text-gray-700 rounded-lg hover:bg-white"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
                     <p className="text-xs text-gray-500">
                       Start date plus number of days adds consecutive leave entries. Check &quot;Leave holiday&quot; to
                       record leave without salary deduction.

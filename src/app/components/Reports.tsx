@@ -1,13 +1,8 @@
 import { useState } from 'react';
 import { useEmployees } from '../context/EmployeeContext';
+import { useViewMonth } from '../context/ViewMonthContext';
 import { Download, FileText, Calendar, Printer } from 'lucide-react';
-
-function formatRupeeInr(amount: number) {
-  return amount.toLocaleString('en-IN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
+import { formatInr } from '../../lib/formatInr';
 
 function escapeHtml(text: string) {
   return text
@@ -47,12 +42,12 @@ function buildSalaryReportHtml(
     <article class="emp-card">
       <h2 class="emp-name">${escapeHtml(emp.name)}</h2>
       <dl class="emp-rows">
-        <div class="row"><dt>Base Salary</dt><dd>₹${formatRupeeInr(emp.baseSalary)}</dd></div>
+        <div class="row"><dt>Base Salary</dt><dd>₹${formatInr(emp.baseSalary)}</dd></div>
         <div class="row"><dt>Absent Days</dt><dd>${emp.absentDays}</dd></div>
         <div class="row"><dt>Days On Time</dt><dd>${emp.daysOnTime}</dd></div>
-        <div class="row"><dt>Daily Rate</dt><dd>₹${formatRupeeInr(emp.dailyRate)}</dd></div>
-        <div class="row deduction"><dt>Deduction</dt><dd>-₹${formatRupeeInr(emp.deduction)}</dd></div>
-        <div class="row final"><dt>Final Salary</dt><dd>₹${formatRupeeInr(emp.finalSalary)}</dd></div>
+        <div class="row"><dt>Daily Rate</dt><dd>₹${formatInr(emp.dailyRate)}</dd></div>
+        <div class="row deduction"><dt>Deduction</dt><dd>-₹${formatInr(emp.deduction)}</dd></div>
+        <div class="row final"><dt>Final Salary</dt><dd>₹${formatInr(emp.finalSalary)}</dd></div>
       </dl>
     </article>`
     )
@@ -159,9 +154,9 @@ function buildSalaryReportHtml(
     ${cardsHtml}
   </div>
   <div class="totals">
-    <div><strong>Total base</strong><br/>₹${formatRupeeInr(totals.base)}</div>
-    <div><strong>Total deduction</strong><br/><span style="color:#dc2626">₹${formatRupeeInr(totals.deduction)}</span></div>
-    <div><strong>Total final</strong><br/><span style="color:#0d9488">₹${formatRupeeInr(totals.final)}</span></div>
+    <div><strong>Total base</strong><br/>₹${formatInr(totals.base)}</div>
+    <div><strong>Total deduction</strong><br/><span style="color:#dc2626">₹${formatInr(totals.deduction)}</span></div>
+    <div><strong>Total final</strong><br/><span style="color:#0d9488">₹${formatInr(totals.final)}</span></div>
   </div>
   <p class="footer-note">Generated ${escapeHtml(new Date().toLocaleString())}</p>
 </body>
@@ -170,10 +165,10 @@ function buildSalaryReportHtml(
 
 export const Reports = () => {
   const { employees, calculateSalary } = useEmployees();
-  const currentDate = new Date();
+  const { month: viewMonth, year: viewYear, setViewMonthYear } = useViewMonth();
 
-  const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth() + 1);
-  const [selectedYear, setSelectedYear] = useState(currentDate.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState(viewMonth);
+  const [selectedYear, setSelectedYear] = useState(viewYear);
 
   const months = [
     { value: 1, label: 'January' },
@@ -318,7 +313,11 @@ export const Reports = () => {
               <label className="block text-sm text-gray-600 mb-1">Month</label>
               <select
                 value={selectedMonth}
-                onChange={(e) => setSelectedMonth(parseInt(e.target.value, 10))}
+                onChange={(e) => {
+                  const m = parseInt(e.target.value, 10);
+                  setSelectedMonth(m);
+                  setViewMonthYear(m, selectedYear);
+                }}
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {months.map((month) => (
@@ -332,7 +331,11 @@ export const Reports = () => {
               <label className="block text-sm text-gray-600 mb-1">Year</label>
               <select
                 value={selectedYear}
-                onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
+                onChange={(e) => {
+                  const y = parseInt(e.target.value, 10);
+                  setSelectedYear(y);
+                  setViewMonthYear(selectedMonth, y);
+                }}
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {years.map((year) => (
@@ -354,7 +357,7 @@ export const Reports = () => {
             </div>
             <div>
               <p className="text-sm text-gray-600">Total Base Salary</p>
-              <p className="text-2xl text-gray-900">₹{formatRupeeInr(totalBaseSalary)}</p>
+              <p className="text-2xl text-gray-900">₹{formatInr(totalBaseSalary)}</p>
             </div>
           </div>
         </div>
@@ -366,7 +369,7 @@ export const Reports = () => {
             </div>
             <div>
               <p className="text-sm text-gray-600">Total Deductions</p>
-              <p className="text-2xl text-red-600">₹{formatRupeeInr(totalDeductions)}</p>
+              <p className="text-2xl text-red-600">₹{formatInr(totalDeductions)}</p>
             </div>
           </div>
         </div>
@@ -378,7 +381,7 @@ export const Reports = () => {
             </div>
             <div>
               <p className="text-sm text-gray-600">Total Final Salary</p>
-              <p className="text-2xl text-teal-600">₹{formatRupeeInr(totalFinalSalary)}</p>
+              <p className="text-2xl text-teal-600">₹{formatInr(totalFinalSalary)}</p>
             </div>
           </div>
         </div>
@@ -409,7 +412,7 @@ export const Reports = () => {
                 <dl className="space-y-1.5 text-sm">
                   <div className="flex justify-between gap-2">
                     <dt className="text-gray-800">Base Salary</dt>
-                    <dd className="font-medium">₹{formatRupeeInr(emp.baseSalary)}</dd>
+                    <dd className="font-medium">₹{formatInr(emp.baseSalary)}</dd>
                   </div>
                   <div className="flex justify-between gap-2">
                     <dt className="text-gray-800">Absent Days</dt>
@@ -421,15 +424,15 @@ export const Reports = () => {
                   </div>
                   <div className="flex justify-between gap-2">
                     <dt className="text-gray-800">Daily Rate</dt>
-                    <dd className="font-medium">₹{formatRupeeInr(emp.dailyRate)}</dd>
+                    <dd className="font-medium">₹{formatInr(emp.dailyRate)}</dd>
                   </div>
                   <div className="flex justify-between gap-2 text-red-600 font-semibold">
                     <dt>Deduction</dt>
-                    <dd>-₹{formatRupeeInr(emp.deduction)}</dd>
+                    <dd>-₹{formatInr(emp.deduction)}</dd>
                   </div>
                   <div className="flex justify-between gap-2 pt-2 mt-1 border-t border-gray-200 text-teal-600 font-bold text-base">
                     <dt>Final Salary</dt>
-                    <dd>₹{formatRupeeInr(emp.finalSalary)}</dd>
+                    <dd>₹{formatInr(emp.finalSalary)}</dd>
                   </div>
                 </dl>
               </div>
@@ -478,7 +481,7 @@ export const Reports = () => {
                         {emp.phone?.trim() ? emp.phone : '—'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
-                        ₹{formatRupeeInr(emp.baseSalary)}
+                        ₹{formatInr(emp.baseSalary)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-center text-red-600">
                         {emp.absentDays}
@@ -487,13 +490,13 @@ export const Reports = () => {
                         {emp.daysOnTime}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
-                        ₹{formatRupeeInr(emp.dailyRate)}
+                        ₹{formatInr(emp.dailyRate)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-red-600">
-                        ₹{formatRupeeInr(emp.deduction)}
+                        ₹{formatInr(emp.deduction)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-teal-600 font-medium">
-                        ₹{formatRupeeInr(emp.finalSalary)}
+                        ₹{formatInr(emp.finalSalary)}
                       </td>
                     </tr>
                   ))}
@@ -502,16 +505,16 @@ export const Reports = () => {
                       TOTAL
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
-                      ₹{formatRupeeInr(totalBaseSalary)}
+                      ₹{formatInr(totalBaseSalary)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-center text-gray-400">-</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-center text-gray-400">-</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-400">-</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-red-600">
-                      ₹{formatRupeeInr(totalDeductions)}
+                      ₹{formatInr(totalDeductions)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-teal-600 font-medium">
-                      ₹{formatRupeeInr(totalFinalSalary)}
+                      ₹{formatInr(totalFinalSalary)}
                     </td>
                   </tr>
                 </tbody>

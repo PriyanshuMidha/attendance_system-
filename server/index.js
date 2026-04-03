@@ -65,6 +65,15 @@ const holidaySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const monthDaysOnTimeSchema = new mongoose.Schema(
+  {
+    month: { type: Number, required: true },
+    year: { type: Number, required: true },
+    daysOnTime: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
 const employeeSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
@@ -73,6 +82,8 @@ const employeeSchema = new mongoose.Schema(
     aadharPhoto: { type: String },
     dateOfJoining: { type: String },
     holidays: { type: [holidaySchema], default: [] },
+    /** Display/reporting only; salary still follows holidays + excludeFromDeduction. */
+    monthlyDaysOnTime: { type: [monthDaysOnTimeSchema], default: [] },
     isDeleted: { type: Boolean, default: false },
   },
   { timestamps: true }
@@ -90,6 +101,12 @@ function normalizeSalary(v) {
   }
   const n = Number(v);
   return Number.isNaN(n) ? 0 : n;
+}
+
+function clampDaysOnTime0to30(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(30, Math.max(0, n));
 }
 
 const Employee =
@@ -121,7 +138,16 @@ function toEmployee(doc) {
         return base;
       })
     : [];
-  return {
+  const monthlyDaysOnTime = Array.isArray(o.monthlyDaysOnTime)
+    ? o.monthlyDaysOnTime
+        .map((e) => ({
+          month: Number(e?.month) || 0,
+          year: Number(e?.year) || 0,
+          daysOnTime: clampDaysOnTime0to30(e?.daysOnTime),
+        }))
+        .filter((e) => e.month >= 1 && e.month <= 12 && e.year >= 2000 && e.year <= 2100)
+    : [];
+  const base = {
     id,
     name: String(o.name ?? ''),
     phone: String(o.phone ?? ''),
@@ -134,6 +160,10 @@ function toEmployee(doc) {
       : {}),
     holidays,
   };
+  if (monthlyDaysOnTime.length > 0) {
+    return { ...base, monthlyDaysOnTime };
+  }
+  return base;
 }
 
 const app = express();
@@ -320,6 +350,53 @@ api.delete('/employees/:id/holidays/:date', async (req, res) => {
     );
     if (!doc) return res.status(404).json({ error: 'Not found' });
     res.json(toEmployee(doc));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+api.patch('/employees/:id/month-days-on-time', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
+    const { month, year, daysOnTime, clear } = req.body;
+    if (month == null || year == null) {
+      return res.status(400).json({ error: 'month and year required' });
+    }
+    const m = Number(month);
+    const y = Number(year);
+    if (m < 1 || m > 12 || !Number.isFinite(y)) {
+      return res.status(400).json({ error: 'Invalid month or year' });
+    }
+    const emp = await findActiveEmployee(id);
+    if (!emp) return res.status(404).json({ error: 'Not found' });
+    if (!Array.isArray(emp.monthlyDaysOnTime)) {
+      emp.monthlyDaysOnTime = [];
+    }
+    if (clear === true) {
+      emp.monthlyDaysOnTime = emp.monthlyDaysOnTime.filter(
+        (e) => !(Number(e.month) === m && Number(e.year) === y)
+      );
+    } else {
+      if (daysOnTime == null) {
+        return res.status(400).json({ error: 'daysOnTime required unless clear is true' });
+      }
+      const d = clampDaysOnTime0to30(daysOnTime);
+      const idx = emp.monthlyDaysOnTime.findIndex(
+        (e) => Number(e.month) === m && Number(e.year) === y
+      );
+      if (idx >= 0) {
+        emp.monthlyDaysOnTime[idx].daysOnTime = d;
+      } else {
+        emp.monthlyDaysOnTime.push({ month: m, year: y, daysOnTime: d });
+      }
+    }
+    emp.markModified('monthlyDaysOnTime');
+    await emp.save();
+    res.json(toEmployee(emp));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: String(e.message) });

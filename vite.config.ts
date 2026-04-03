@@ -7,14 +7,21 @@ import dotenv from 'dotenv'
 dotenv.config({ path: path.resolve(__dirname, '.env') })
 const apiPort = process.env.API_PORT || '3002'
 
+const apiTarget = `http://127.0.0.1:${apiPort}`
+
+const apiProxy = {
+  '/api': {
+    target: apiTarget,
+    changeOrigin: true,
+  },
+} as const
+
 export default defineConfig({
   server: {
-    proxy: {
-      '/api': {
-        target: `http://localhost:${apiPort}`,
-        changeOrigin: true,
-      },
-    },
+    proxy: { ...apiProxy },
+  },
+  preview: {
+    proxy: { ...apiProxy },
   },
   plugins: [
     // The React and Tailwind plugins are both required for Make, even if
