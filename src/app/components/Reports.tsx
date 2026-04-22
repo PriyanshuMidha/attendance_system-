@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useEmployees } from '../context/EmployeeContext';
 import { useViewMonth } from '../context/ViewMonthContext';
+import { useAuth } from '../context/AuthContext';
 import { Download, FileText, Calendar, Printer } from 'lucide-react';
 import { formatInr } from '../../lib/formatInr';
 
@@ -27,15 +28,22 @@ type ReportRow = {
   daysOnTime: number;
   dailyRate: number;
   deduction: number;
+  extraPay: number;
   finalSalary: number;
 };
+
+function formatDayValue(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
 
 function buildSalaryReportHtml(
   reportData: ReportRow[],
   monthLabel: string,
   year: number,
-  totals: { base: number; deduction: number; final: number }
+  totals: { base: number; deduction: number; extraPay: number; final: number },
+  opts?: { showExtraPay?: boolean }
 ) {
+  const showExtraPay = opts?.showExtraPay === true;
   const cardsHtml = reportData
     .map(
       (emp) => `
@@ -43,10 +51,11 @@ function buildSalaryReportHtml(
       <h2 class="emp-name">${escapeHtml(emp.name)}</h2>
       <dl class="emp-rows">
         <div class="row"><dt>Base Salary</dt><dd>₹${formatInr(emp.baseSalary)}</dd></div>
-        <div class="row"><dt>Absent Days</dt><dd>${emp.absentDays}</dd></div>
-        <div class="row"><dt>Days On Time</dt><dd>${emp.daysOnTime}</dd></div>
+        <div class="row"><dt>Absent Days</dt><dd>${formatDayValue(emp.absentDays)}</dd></div>
+        <div class="row"><dt>Days On Time</dt><dd>${formatDayValue(emp.daysOnTime)}</dd></div>
         <div class="row"><dt>Daily Rate</dt><dd>₹${formatInr(emp.dailyRate)}</dd></div>
         <div class="row deduction"><dt>Deduction</dt><dd>-₹${formatInr(emp.deduction)}</dd></div>
+        ${showExtraPay ? `<div class="row extra"><dt>Extra Pay</dt><dd>₹${formatInr(emp.extraPay)}</dd></div>` : ''}
         <div class="row final"><dt>Final Salary</dt><dd>₹${formatInr(emp.finalSalary)}</dd></div>
       </dl>
     </article>`
@@ -115,6 +124,7 @@ function buildSalaryReportHtml(
     .row dt { margin: 0; font-weight: 400; color: #111; }
     .row dd { margin: 0; font-weight: 500; text-align: right; }
     .row.deduction dt, .row.deduction dd { color: #dc2626; font-weight: 600; }
+    .row.extra dt, .row.extra dd { color: #1d4ed8; font-weight: 600; }
     .row.final { margin-top: 10px; padding-top: 8px; border-top: 1px solid #e5e7eb; }
     .row.final dt, .row.final dd {
       color: #0d9488;
@@ -136,7 +146,7 @@ function buildSalaryReportHtml(
       border-radius: 4px;
       font-size: 0.875rem;
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       gap: 8px;
       text-align: center;
     }
@@ -156,6 +166,7 @@ function buildSalaryReportHtml(
   <div class="totals">
     <div><strong>Total base</strong><br/>₹${formatInr(totals.base)}</div>
     <div><strong>Total deduction</strong><br/><span style="color:#dc2626">₹${formatInr(totals.deduction)}</span></div>
+    ${showExtraPay ? `<div><strong>Total extra</strong><br/><span style="color:#1d4ed8">₹${formatInr(totals.extraPay)}</span></div>` : ''}
     <div><strong>Total final</strong><br/><span style="color:#0d9488">₹${formatInr(totals.final)}</span></div>
   </div>
   <p class="footer-note">Generated ${escapeHtml(new Date().toLocaleString())}</p>
@@ -166,6 +177,8 @@ function buildSalaryReportHtml(
 export const Reports = () => {
   const { employees, calculateSalary } = useEmployees();
   const { month: viewMonth, year: viewYear, setViewMonthYear } = useViewMonth();
+  const { authMode } = useAuth();
+  const isEnhancedMode = authMode === 'enhanced';
 
   const [selectedMonth, setSelectedMonth] = useState(viewMonth);
   const [selectedYear, setSelectedYear] = useState(viewYear);
@@ -201,6 +214,7 @@ export const Reports = () => {
 
   const totalBaseSalary = reportData.reduce((sum, emp) => sum + emp.baseSalary, 0);
   const totalDeductions = reportData.reduce((sum, emp) => sum + emp.deduction, 0);
+  const totalExtraPay = reportData.reduce((sum, emp) => sum + emp.extraPay, 0);
   const totalFinalSalary = reportData.reduce((sum, emp) => sum + emp.finalSalary, 0);
 
   const downloadCSV = () => {
@@ -212,6 +226,7 @@ export const Reports = () => {
       'Days On Time',
       'Daily Rate',
       'Deduction',
+      ...(isEnhancedMode ? ['Extra Pay'] : []),
       'Final Salary',
     ];
 
@@ -223,6 +238,7 @@ export const Reports = () => {
       csvEscape(emp.daysOnTime),
       csvEscape(emp.dailyRate),
       csvEscape(emp.deduction),
+      ...(isEnhancedMode ? [csvEscape(emp.extraPay)] : []),
       csvEscape(emp.finalSalary),
     ]);
 
@@ -230,7 +246,9 @@ export const Reports = () => {
       headers.join(','),
       ...rows.map((row) => row.join(',')),
       '',
-      `Total,,${totalBaseSalary},,,${totalDeductions},${totalFinalSalary}`,
+      isEnhancedMode
+        ? `Total,,${totalBaseSalary},,,${totalDeductions},${totalExtraPay},${totalFinalSalary}`
+        : `Total,,${totalBaseSalary},,,${totalDeductions},${totalFinalSalary}`,
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
@@ -247,7 +265,8 @@ export const Reports = () => {
       reportData,
       monthLabel,
       selectedYear,
-      { base: totalBaseSalary, deduction: totalDeductions, final: totalFinalSalary }
+      { base: totalBaseSalary, deduction: totalDeductions, extraPay: totalExtraPay, final: totalFinalSalary },
+      { showExtraPay: isEnhancedMode }
     );
 
   const downloadReport = () => {
@@ -349,7 +368,7 @@ export const Reports = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+      <div className={`grid grid-cols-1 ${isEnhancedMode ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6 mb-6`}>
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div className="flex items-center gap-3 mb-2">
             <div className="p-2 bg-blue-50 rounded-lg">
@@ -373,6 +392,20 @@ export const Reports = () => {
             </div>
           </div>
         </div>
+
+        {isEnhancedMode && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 bg-blue-50 rounded-lg">
+                <FileText className="w-6 h-6 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Total Extra Pay</p>
+                <p className="text-2xl text-blue-700">₹{formatInr(totalExtraPay)}</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div className="flex items-center gap-3 mb-2">
@@ -416,11 +449,11 @@ export const Reports = () => {
                   </div>
                   <div className="flex justify-between gap-2">
                     <dt className="text-gray-800">Absent Days</dt>
-                    <dd className="font-medium">{emp.absentDays}</dd>
+                    <dd className="font-medium">{formatDayValue(emp.absentDays)}</dd>
                   </div>
                   <div className="flex justify-between gap-2">
                     <dt className="text-gray-800">Days On Time</dt>
-                    <dd className="font-medium">{emp.daysOnTime}</dd>
+                    <dd className="font-medium">{formatDayValue(emp.daysOnTime)}</dd>
                   </div>
                   <div className="flex justify-between gap-2">
                     <dt className="text-gray-800">Daily Rate</dt>
@@ -430,6 +463,12 @@ export const Reports = () => {
                     <dt>Deduction</dt>
                     <dd>-₹{formatInr(emp.deduction)}</dd>
                   </div>
+                  {isEnhancedMode && (
+                    <div className="flex justify-between gap-2 text-blue-700 font-semibold">
+                      <dt>Extra Pay</dt>
+                      <dd>₹{formatInr(emp.extraPay)}</dd>
+                    </div>
+                  )}
                   <div className="flex justify-between gap-2 pt-2 mt-1 border-t border-gray-200 text-teal-600 font-bold text-base">
                     <dt>Final Salary</dt>
                     <dd>₹{formatInr(emp.finalSalary)}</dd>
@@ -468,6 +507,11 @@ export const Reports = () => {
                     <th className="px-6 py-3 text-right text-xs text-gray-600 uppercase tracking-wider">
                       Deduction
                     </th>
+                    {isEnhancedMode && (
+                      <th className="px-6 py-3 text-right text-xs text-gray-600 uppercase tracking-wider">
+                        Extra Pay
+                      </th>
+                    )}
                     <th className="px-6 py-3 text-right text-xs text-gray-600 uppercase tracking-wider">
                       Final Salary
                     </th>
@@ -484,10 +528,10 @@ export const Reports = () => {
                         ₹{formatInr(emp.baseSalary)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-center text-red-600">
-                        {emp.absentDays}
+                        {formatDayValue(emp.absentDays)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-center text-green-600">
-                        {emp.daysOnTime}
+                        {formatDayValue(emp.daysOnTime)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
                         ₹{formatInr(emp.dailyRate)}
@@ -495,6 +539,11 @@ export const Reports = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-red-600">
                         ₹{formatInr(emp.deduction)}
                       </td>
+                      {isEnhancedMode && (
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-blue-700">
+                          ₹{formatInr(emp.extraPay)}
+                        </td>
+                      )}
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-teal-600 font-medium">
                         ₹{formatInr(emp.finalSalary)}
                       </td>
@@ -513,6 +562,11 @@ export const Reports = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-red-600">
                       ₹{formatInr(totalDeductions)}
                     </td>
+                    {isEnhancedMode && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-blue-700">
+                        ₹{formatInr(totalExtraPay)}
+                      </td>
+                    )}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-teal-600 font-medium">
                       ₹{formatInr(totalFinalSalary)}
                     </td>

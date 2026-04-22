@@ -1,16 +1,23 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { apiFetch } from '../../lib/api';
+import { useAuth } from './AuthContext';
+
+export type LeaveType = 'full' | 'half';
 
 export interface Holiday {
   date: string;
   month: number;
   year: number;
+  leaveType?: LeaveType;
   /** Paid / calendar leave: recorded but not counted toward salary deduction */
   excludeFromDeduction?: boolean;
 }
 
 /** Parse `<input type="date">` value (YYYY-MM-DD) so month/year are not shifted by UTC. */
-export function holidayFromDateInput(isoDate: string, opts?: { excludeFromDeduction?: boolean }): Holiday {
+export function holidayFromDateInput(
+  isoDate: string,
+  opts?: { excludeFromDeduction?: boolean; leaveType?: LeaveType }
+): Holiday {
   const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(isoDate);
   let base: Holiday;
   if (m) {
@@ -24,7 +31,10 @@ export function holidayFromDateInput(isoDate: string, opts?: { excludeFromDeduct
     };
   }
   if (opts?.excludeFromDeduction) {
-    return { ...base, excludeFromDeduction: true };
+    base = { ...base, excludeFromDeduction: true };
+  }
+  if (opts?.leaveType === 'half') {
+    base = { ...base, leaveType: 'half' };
   }
   return base;
 }
@@ -33,7 +43,7 @@ export function holidayFromDateInput(isoDate: string, opts?: { excludeFromDeduct
 export function consecutiveHolidaysFrom(
   isoDate: string,
   count: number,
-  opts?: { excludeFromDeduction?: boolean }
+  opts?: { excludeFromDeduction?: boolean; leaveType?: LeaveType }
 ): Holiday[] {
   const n = Math.min(365, Math.max(1, Math.floor(Number(count)) || 1));
   const parts = isoDate.split('-').map(Number);
@@ -54,9 +64,16 @@ export function consecutiveHolidaysFrom(
 }
 
 export type MonthDaysOnTimeEntry = { month: number; year: number; daysOnTime: number };
+export type MonthExtraWorkEntry = {
+  month: number;
+  year: number;
+  extraFullDays: number;
+  extraHalfDays: number;
+};
 
 export interface Employee {
   id: string;
+  accountMode?: 'legacy' | 'enhanced';
   name: string;
   /** Empty string or omitted when not provided */
   phone?: string;
@@ -66,6 +83,7 @@ export interface Employee {
   holidays: Holiday[];
   /** Per-month display override; does not affect deduction / final salary */
   monthlyDaysOnTime?: MonthDaysOnTimeEntry[];
+  monthlyExtraWork?: MonthExtraWorkEntry[];
 }
 
 /** PATCH body: use `aadharPhoto: null` to clear the image in MongoDB. */
@@ -81,12 +99,24 @@ interface EmployeeContextType {
   deleteEmployee: (id: string) => Promise<void>;
   addHoliday: (id: string, holiday: Holiday) => Promise<void>;
   removeHoliday: (id: string, date: string) => Promise<void>;
-  patchHoliday: (id: string, date: string, patch: { excludeFromDeduction: boolean }) => Promise<void>;
+  patchHoliday: (
+    id: string,
+    date: string,
+    patch: { excludeFromDeduction?: boolean; leaveType?: LeaveType }
+  ) => Promise<void>;
   patchMonthDaysOnTime: (
     id: string,
     month: number,
     year: number,
     payload: { daysOnTime: number } | { clear: true }
+  ) => Promise<void>;
+  patchMonthExtraWork: (
+    id: string,
+    month: number,
+    year: number,
+    payload:
+      | { extraFullDays: number; extraHalfDays: number }
+      | { clear: true }
   ) => Promise<void>;
   getEmployee: (id: string) => Employee | undefined;
   calculateSalary: (employee: Employee, month?: number, year?: number) => {
@@ -95,6 +125,7 @@ interface EmployeeContextType {
     daysOnTime: number;
     dailyRate: number;
     deduction: number;
+    extraPay: number;
     finalSalary: number;
   };
 }
@@ -110,20 +141,30 @@ export const useEmployees = () => {
 };
 
 export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { authMode } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const authHeaders = useCallback(
+    () => ({
+      'x-auth-mode': authMode ?? 'legacy',
+    }),
+    [authMode]
+  );
+
   const refreshEmployees = useCallback(async () => {
     setError(null);
     try {
-      const list = await apiFetch<Employee[]>('/employees');
+      const list = await apiFetch<Employee[]>('/employees', {
+        headers: authHeaders(),
+      });
       setEmployees(Array.isArray(list) ? list : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load employees');
       setEmployees([]);
     }
-  }, []);
+  }, [authHeaders]);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,10 +187,12 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
         date: h.date,
         month: h.month,
         year: h.year,
+        ...(h.leaveType === 'half' ? { leaveType: 'half' } : {}),
         ...(h.excludeFromDeduction ? { excludeFromDeduction: true } : {}),
       }));
       const created = await apiFetch<Employee>('/employees', {
         method: 'POST',
+        headers: authHeaders(),
         body: JSON.stringify({
           name: employee.name,
           phone: employee.phone?.trim() ?? '',
@@ -180,6 +223,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
 
       const updated = await apiFetch<Employee>(`/employees/${id}`, {
         method: 'PATCH',
+        headers: authHeaders(),
         body: JSON.stringify(payload),
       });
       setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
@@ -193,7 +237,10 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
   const deleteEmployee = async (id: string) => {
     setError(null);
     try {
-      await apiFetch(`/employees/${id}`, { method: 'DELETE' });
+      await apiFetch(`/employees/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
       setEmployees((prev) => prev.filter((emp) => emp.id !== id));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to delete employee';
@@ -210,9 +257,11 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
         month: holiday.month,
         year: holiday.year,
       };
+      if (holiday.leaveType === 'half') body.leaveType = 'half';
       if (holiday.excludeFromDeduction) body.excludeFromDeduction = true;
       const updated = await apiFetch<Employee>(`/employees/${id}/holidays`, {
         method: 'POST',
+        headers: authHeaders(),
         body: JSON.stringify(body),
       });
       setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
@@ -223,17 +272,54 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
     }
   };
 
-  const patchHoliday = async (id: string, date: string, patch: { excludeFromDeduction: boolean }) => {
+  const patchHoliday = async (
+    id: string,
+    date: string,
+    patch: { excludeFromDeduction?: boolean; leaveType?: LeaveType }
+  ) => {
     setError(null);
     try {
       const enc = encodeURIComponent(date);
       const updated = await apiFetch<Employee>(`/employees/${id}/holidays/${enc}`, {
         method: 'PATCH',
+        headers: authHeaders(),
         body: JSON.stringify(patch),
       });
       setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to update leave';
+      setError(msg);
+      throw e;
+    }
+  };
+
+  const patchMonthExtraWork = async (
+    id: string,
+    month: number,
+    year: number,
+    payload:
+      | { extraFullDays: number; extraHalfDays: number }
+      | { clear: true }
+  ) => {
+    setError(null);
+    try {
+      const body =
+        'clear' in payload && payload.clear
+          ? { month, year, clear: true }
+          : {
+              month,
+              year,
+              extraFullDays: payload.extraFullDays,
+              extraHalfDays: payload.extraHalfDays,
+            };
+      const updated = await apiFetch<Employee>(`/employees/${id}/month-extra-work`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      });
+      setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to update extra work';
       setError(msg);
       throw e;
     }
@@ -245,6 +331,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
       const enc = encodeURIComponent(date);
       const updated = await apiFetch<Employee>(`/employees/${id}/holidays/${enc}`, {
         method: 'DELETE',
+        headers: authHeaders(),
       });
       setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
     } catch (e) {
@@ -268,6 +355,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
           : { month, year, daysOnTime: (payload as { daysOnTime: number }).daysOnTime };
       const updated = await apiFetch<Employee>(`/employees/${id}/month-days-on-time`, {
         method: 'PATCH',
+        headers: authHeaders(),
         body: JSON.stringify(body),
       });
       setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
@@ -289,35 +377,50 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
       (h) => h.month === targetMonth && h.year === targetYear
     );
     const totalLeaveDays = monthLeaves.length;
-    const absentDays = totalLeaveDays;
     const deductibleLeaveDays = monthLeaves.filter((h) => !h.excludeFromDeduction).length;
 
     const dailyRate = employee.salary / 30;
 
     let deduction = 0;
-    if (deductibleLeaveDays > 0) {
+    let absentDays = totalLeaveDays;
+    let computedDaysOnTime = 30 - totalLeaveDays;
+    let extraPay = 0;
+
+    if (authMode === 'enhanced') {
+      absentDays = monthLeaves.reduce((sum, h) => sum + (h.leaveType === 'half' ? 0.5 : 1), 0);
+      computedDaysOnTime = 30 - absentDays;
+      deduction = monthLeaves.reduce((sum, h) => {
+        if (h.excludeFromDeduction) return sum;
+        return sum + (h.leaveType === 'half' ? dailyRate * 0.5 : dailyRate);
+      }, 0);
+      const extraEntry = employee.monthlyExtraWork?.find(
+        (e) => e.month === targetMonth && e.year === targetYear
+      );
+      extraPay =
+        ((extraEntry?.extraFullDays ?? 0) * dailyRate) +
+        ((extraEntry?.extraHalfDays ?? 0) * dailyRate * 0.5);
+    } else if (deductibleLeaveDays > 0) {
       const firstTwoDays = Math.min(deductibleLeaveDays, 2);
       const remainingDays = Math.max(0, deductibleLeaveDays - 2);
 
       deduction = firstTwoDays * dailyRate * 0.5 + remainingDays * dailyRate;
     }
-
-    const computedDaysOnTime = 30 - totalLeaveDays;
     const dotOverride = employee.monthlyDaysOnTime?.find(
       (e) => e.month === targetMonth && e.year === targetYear
     );
     const daysOnTime =
       dotOverride != null && Number.isFinite(dotOverride.daysOnTime)
-        ? Math.min(30, Math.max(0, Math.round(dotOverride.daysOnTime)))
+        ? Math.min(30, Math.max(0, dotOverride.daysOnTime))
         : computedDaysOnTime;
-    const finalSalary = employee.salary - deduction;
+    const finalSalary = employee.salary - deduction + extraPay;
 
     return {
       baseSalary: employee.salary,
-      absentDays,
-      daysOnTime,
+      absentDays: parseFloat(absentDays.toFixed(2)),
+      daysOnTime: parseFloat(daysOnTime.toFixed(2)),
       dailyRate: parseFloat(dailyRate.toFixed(2)),
       deduction: parseFloat(deduction.toFixed(2)),
+      extraPay: parseFloat(extraPay.toFixed(2)),
       finalSalary: parseFloat(finalSalary.toFixed(2)),
     };
   };
@@ -336,6 +439,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
         removeHoliday,
         patchHoliday,
         patchMonthDaysOnTime,
+        patchMonthExtraWork,
         getEmployee,
         calculateSalary,
       }}

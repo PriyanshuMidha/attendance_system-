@@ -5,8 +5,10 @@ import {
   holidayFromDateInput,
   consecutiveHolidaysFrom,
   type EmployeeUpdate,
+  type LeaveType,
 } from '../context/EmployeeContext';
 import { useViewMonth, firstDayOfMonthIso } from '../context/ViewMonthContext';
+import { useAuth } from '../context/AuthContext';
 import {
   ArrowLeft,
   Calendar,
@@ -45,6 +47,10 @@ const MONTH_OPTIONS = [
   { value: 12, label: 'December' },
 ];
 
+function formatDayValue(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 export const EmployeeDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -54,14 +60,17 @@ export const EmployeeDetail = () => {
     removeHoliday,
     patchHoliday,
     patchMonthDaysOnTime,
+    patchMonthExtraWork,
     calculateSalary,
     updateEmployee,
     deleteEmployee,
   } = useEmployees();
   const { month: viewMonth, year: viewYear, setViewMonthYear } = useViewMonth();
+  const { authMode } = useAuth();
 
   const [newHoliday, setNewHoliday] = useState('');
   const [newHolidayDayCount, setNewHolidayDayCount] = useState('1');
+  const [newHolidayLeaveType, setNewHolidayLeaveType] = useState<LeaveType>('full');
   const [newLeaveHolidayNoDeduction, setNewLeaveHolidayNoDeduction] = useState(false);
   const [showAddHoliday, setShowAddHoliday] = useState(false);
   const [holidayMonth, setHolidayMonth] = useState(() => viewMonth);
@@ -77,35 +86,48 @@ export const EmployeeDetail = () => {
   const [editAadharPhoto, setEditAadharPhoto] = useState<string | undefined>(undefined);
   const [removeAadhar, setRemoveAadhar] = useState(false);
   const [daysOnTimeDraft, setDaysOnTimeDraft] = useState('');
+  const [extraFullDaysDraft, setExtraFullDaysDraft] = useState('0');
+  const [extraHalfDaysDraft, setExtraHalfDaysDraft] = useState('0');
+  const isEnhancedMode = authMode === 'enhanced';
 
   const employee = getEmployee(id!);
 
   const leaveKeyForView =
     employee?.holidays
       .filter((h) => h.month === viewMonth && h.year === viewYear)
-      .map((h) => `${h.date}:${h.excludeFromDeduction ? 1 : 0}`)
+      .map((h) => `${h.date}:${h.excludeFromDeduction ? 1 : 0}:${h.leaveType ?? 'full'}`)
       .join('|') ?? '';
   const daysOnTimeStoreKey =
     employee?.monthlyDaysOnTime
       ?.map((e) => `${e.month}-${e.year}-${e.daysOnTime}`)
       .sort()
       .join('|') ?? '';
+  const extraWorkStoreKey =
+    employee?.monthlyExtraWork
+      ?.map((e) => `${e.month}-${e.year}-${e.extraFullDays}-${e.extraHalfDays}`)
+      .sort()
+      .join('|') ?? '';
 
   useEffect(() => {
     if (!employee) return;
-    const totalLeave = employee.holidays.filter(
-      (h) => h.month === viewMonth && h.year === viewYear
-    ).length;
+    const totalLeave = employee.holidays
+      .filter((h) => h.month === viewMonth && h.year === viewYear)
+      .reduce((sum, h) => sum + (isEnhancedMode && h.leaveType === 'half' ? 0.5 : 1), 0);
     const computed = 30 - totalLeave;
     const o = employee.monthlyDaysOnTime?.find(
       (e) => e.month === viewMonth && e.year === viewYear
     );
     const shown =
       o != null && Number.isFinite(o.daysOnTime)
-        ? Math.min(30, Math.max(0, Math.round(o.daysOnTime)))
+        ? Math.min(30, Math.max(0, o.daysOnTime))
         : computed;
     setDaysOnTimeDraft(String(shown));
-  }, [employee, viewMonth, viewYear, leaveKeyForView, daysOnTimeStoreKey]);
+    const extraEntry = employee.monthlyExtraWork?.find(
+      (e) => e.month === viewMonth && e.year === viewYear
+    );
+    setExtraFullDaysDraft(String(extraEntry?.extraFullDays ?? 0));
+    setExtraHalfDaysDraft(String(extraEntry?.extraHalfDays ?? 0));
+  }, [employee, viewMonth, viewYear, leaveKeyForView, daysOnTimeStoreKey, extraWorkStoreKey, isEnhancedMode]);
 
   useEffect(() => {
     setHolidayMonth(viewMonth);
@@ -220,15 +242,15 @@ export const EmployeeDetail = () => {
 
   const totalLeavesInView = employee.holidays.filter(
     (h) => h.month === viewMonth && h.year === viewYear
-  ).length;
+  ).reduce((sum, h) => sum + (isEnhancedMode && h.leaveType === 'half' ? 0.5 : 1), 0);
   const computedDaysOnTime = 30 - totalLeavesInView;
   const hasDaysOverride = Boolean(
     employee.monthlyDaysOnTime?.some((e) => e.month === viewMonth && e.year === viewYear)
   );
 
   const handleSaveDaysOnTime = async () => {
-    const n = parseInt(daysOnTimeDraft, 10);
-    if (Number.isNaN(n) || n < 0 || n > 30) {
+    const n = Number(daysOnTimeDraft);
+    if (!Number.isFinite(n) || n < 0 || n > 30) {
       alert('Enter days on time between 0 and 30');
       return;
     }
@@ -242,6 +264,36 @@ export const EmployeeDetail = () => {
   const handleResetDaysOnTime = async () => {
     try {
       await patchMonthDaysOnTime(employee.id, viewMonth, viewYear, { clear: true });
+    } catch {
+      /* error shown in layout */
+    }
+  };
+
+  const handleSaveExtraWork = async () => {
+    const extraFullDays = Number(extraFullDaysDraft);
+    const extraHalfDays = Number(extraHalfDaysDraft);
+    if (
+      !Number.isFinite(extraFullDays) ||
+      !Number.isFinite(extraHalfDays) ||
+      extraFullDays < 0 ||
+      extraHalfDays < 0
+    ) {
+      alert('Enter extra work as 0 or more');
+      return;
+    }
+    try {
+      await patchMonthExtraWork(employee.id, viewMonth, viewYear, {
+        extraFullDays,
+        extraHalfDays,
+      });
+    } catch {
+      /* error shown in layout */
+    }
+  };
+
+  const handleResetExtraWork = async () => {
+    try {
+      await patchMonthExtraWork(employee.id, viewMonth, viewYear, { clear: true });
     } catch {
       /* error shown in layout */
     }
@@ -274,6 +326,7 @@ export const EmployeeDetail = () => {
     const count = Math.max(1, parseInt(newHolidayDayCount, 10) || 1);
     const days = consecutiveHolidaysFrom(newHoliday, count, {
       excludeFromDeduction: newLeaveHolidayNoDeduction,
+      leaveType: isEnhancedMode ? newHolidayLeaveType : 'full',
     });
     if (days.length === 0) {
       alert('Invalid start date');
@@ -286,6 +339,7 @@ export const EmployeeDetail = () => {
       }
       setNewHoliday('');
       setNewHolidayDayCount('1');
+      setNewHolidayLeaveType('full');
       setNewLeaveHolidayNoDeduction(false);
       setShowAddHoliday(false);
     } catch {
@@ -332,6 +386,7 @@ export const EmployeeDetail = () => {
         await removeHoliday(employee.id, editingLeaveDate);
         await addHoliday(employee.id, {
           ...next,
+          ...(prev?.leaveType === 'half' ? { leaveType: 'half' as const } : {}),
           ...(prev?.excludeFromDeduction ? { excludeFromDeduction: true } : {}),
         });
       }
@@ -533,12 +588,12 @@ export const EmployeeDetail = () => {
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Absent Days</p>
-                <p className="text-xl text-red-600">{currentMonthSalary.absentDays}</p>
+                <p className="text-xl text-red-600">{formatDayValue(currentMonthSalary.absentDays)}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Days On Time</p>
                 <p className="text-xs text-gray-500 mb-2">
-                  From leaves (30 − leave days): {computedDaysOnTime}
+                  From leaves (30 − leave days): {formatDayValue(computedDaysOnTime)}
                   {hasDaysOverride ? ' · saved override' : ''}
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
@@ -546,6 +601,7 @@ export const EmployeeDetail = () => {
                     type="number"
                     min={0}
                     max={30}
+                    step={0.5}
                     value={daysOnTimeDraft}
                     onChange={(e) => setDaysOnTimeDraft(e.target.value)}
                     className="w-24 px-2 py-1.5 border border-gray-300 rounded-lg text-xl text-green-600 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -576,6 +632,12 @@ export const EmployeeDetail = () => {
                 <p className="text-sm text-gray-600 mb-1">Deduction</p>
                 <p className="text-lg text-red-600">-₹{formatInr(currentMonthSalary.deduction)}</p>
               </div>
+              {isEnhancedMode && (
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Extra Pay</p>
+                  <p className="text-lg text-blue-700">₹{formatInr(currentMonthSalary.extraPay)}</p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -589,6 +651,7 @@ export const EmployeeDetail = () => {
                 if (!showAddHoliday) {
                   setNewHoliday(firstDayOfMonthIso(viewYear, viewMonth));
                   setNewHolidayDayCount('1');
+                  setNewHolidayLeaveType('full');
                   setNewLeaveHolidayNoDeduction(false);
                 }
                 setShowAddHoliday(!showAddHoliday);
@@ -652,6 +715,19 @@ export const EmployeeDetail = () => {
                 Start date and number of days add consecutive entries. Use &quot;Leave holiday&quot; for paid /
                 non-deducting leave.
               </p>
+              {isEnhancedMode && (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Leave type</label>
+                  <select
+                    value={newHolidayLeaveType}
+                    onChange={(e) => setNewHolidayLeaveType(e.target.value as LeaveType)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="full">Full day</option>
+                    <option value="half">Half day</option>
+                  </select>
+                </div>
+              )}
               <input
                 type="date"
                 value={newHoliday}
@@ -692,6 +768,7 @@ export const EmployeeDetail = () => {
                     setShowAddHoliday(false);
                     setNewHoliday('');
                     setNewHolidayDayCount('1');
+                    setNewHolidayLeaveType('full');
                     setNewLeaveHolidayNoDeduction(false);
                   }}
                   className="flex-1 px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300"
@@ -733,7 +810,14 @@ export const EmployeeDetail = () => {
                 ) : (
                   <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm text-gray-900">{formatHolidayLabel(holiday.date)}</span>
+                    <div>
+                      <span className="text-sm text-gray-900">{formatHolidayLabel(holiday.date)}</span>
+                      {isEnhancedMode && (
+                        <p className="text-xs text-gray-500">
+                          {holiday.leaveType === 'half' ? 'Half day leave' : 'Full day leave'}
+                        </p>
+                      )}
+                    </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
@@ -768,6 +852,25 @@ export const EmployeeDetail = () => {
                     />
                     Leave holiday (no salary deduction)
                   </label>
+                  {isEnhancedMode && (
+                    <div>
+                      <label className="block text-[11px] text-gray-500 mb-1">Leave type</label>
+                      <select
+                        value={holiday.leaveType ?? 'full'}
+                        onChange={(e) => {
+                          patchHoliday(employee.id, holiday.date, {
+                            leaveType: e.target.value as LeaveType,
+                          }).catch(() => {
+                            /* error shown in layout */
+                          });
+                        }}
+                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="full">Full day</option>
+                        <option value="half">Half day</option>
+                      </select>
+                    </div>
+                  )}
                   </div>
                 )}
               </div>
@@ -782,6 +885,65 @@ export const EmployeeDetail = () => {
           </div>
         </div>
       </div>
+
+      {isEnhancedMode && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <div>
+              <h3 className="text-lg text-gray-900">Extra work</h3>
+              <p className="text-sm text-gray-600">
+                Save extra full days and half days for {payrollMonthLabel} {viewYear}. Extra pay follows the daily rate.
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-gray-500">Current extra pay</p>
+              <p className="text-lg text-blue-700">₹{formatInr(currentMonthSalary.extraPay)}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Extra full days</label>
+              <input
+                type="number"
+                min={0}
+                step={0.5}
+                value={extraFullDaysDraft}
+                onChange={(e) => setExtraFullDaysDraft(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Extra half days</label>
+              <input
+                type="number"
+                min={0}
+                step={0.5}
+                value={extraHalfDaysDraft}
+                onChange={(e) => setExtraHalfDaysDraft(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button
+              type="button"
+              onClick={() => void handleSaveExtraWork()}
+              className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+            >
+              Save extra work
+            </button>
+            {employee.monthlyExtraWork?.some((e) => e.month === viewMonth && e.year === viewYear) && (
+              <button
+                type="button"
+                onClick={() => void handleResetExtraWork()}
+                className="px-4 py-2 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">

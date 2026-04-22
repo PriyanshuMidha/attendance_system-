@@ -59,6 +59,7 @@ const holidaySchema = new mongoose.Schema(
     date: { type: String, required: true },
     month: { type: Number, required: true },
     year: { type: Number, required: true },
+    leaveType: { type: String, enum: ['full', 'half'], default: 'full' },
     /** When true, leave is recorded but does not reduce salary (paid leave / holiday). */
     excludeFromDeduction: { type: Boolean, default: false },
   },
@@ -74,8 +75,19 @@ const monthDaysOnTimeSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const monthExtraWorkSchema = new mongoose.Schema(
+  {
+    month: { type: Number, required: true },
+    year: { type: Number, required: true },
+    extraFullDays: { type: Number, default: 0 },
+    extraHalfDays: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const employeeSchema = new mongoose.Schema(
   {
+    accountMode: { type: String, enum: ['legacy', 'enhanced'], default: 'legacy' },
     name: { type: String, required: true },
     phone: { type: String, default: '' },
     salary: { type: Number, required: true },
@@ -84,6 +96,7 @@ const employeeSchema = new mongoose.Schema(
     holidays: { type: [holidaySchema], default: [] },
     /** Display/reporting only; salary still follows holidays + excludeFromDeduction. */
     monthlyDaysOnTime: { type: [monthDaysOnTimeSchema], default: [] },
+    monthlyExtraWork: { type: [monthExtraWorkSchema], default: [] },
     isDeleted: { type: Boolean, default: false },
   },
   { timestamps: true }
@@ -91,6 +104,26 @@ const employeeSchema = new mongoose.Schema(
 
 /** Active employees only (soft-deleted hidden from app). */
 const activeOnly = { isDeleted: { $ne: true } };
+
+function getRequestAccountMode(req) {
+  const raw = String(req.get('x-auth-mode') || '').trim().toLowerCase();
+  return raw === 'enhanced' ? 'enhanced' : 'legacy';
+}
+
+function scopedActiveOnly(accountMode) {
+  if (accountMode === 'enhanced') {
+    return { ...activeOnly, accountMode: 'enhanced' };
+  }
+  return {
+    ...activeOnly,
+    $or: [
+      { accountMode: 'legacy' },
+      { accountMode: { $exists: false } },
+      { accountMode: null },
+      { accountMode: '' },
+    ],
+  };
+}
 
 function normalizeSalary(v) {
   if (v == null || v === '') return 0;
@@ -104,18 +137,24 @@ function normalizeSalary(v) {
 }
 
 function clampDaysOnTime0to30(v) {
-  const n = Math.round(Number(v));
+  const n = Math.round(Number(v) * 2) / 2;
   if (!Number.isFinite(n)) return 0;
   return Math.min(30, Math.max(0, n));
+}
+
+function clampNonNegativeHalfStep(v) {
+  const n = Math.round(Number(v) * 2) / 2;
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, n);
 }
 
 const Employee =
   mongoose.models.Employee ||
   mongoose.model('Employee', employeeSchema, MONGODB_COLLECTION);
 
-async function findActiveEmployee(id) {
+async function findActiveEmployee(id, accountMode) {
   if (!mongoose.isValidObjectId(id)) return null;
-  return Employee.findOne({ _id: id, ...activeOnly });
+  return Employee.findOne({ _id: id, ...scopedActiveOnly(accountMode) });
 }
 
 function toEmployee(doc) {
@@ -132,6 +171,9 @@ function toEmployee(doc) {
           month: Number(h?.month) || 0,
           year: Number(h?.year) || 0,
         };
+        if (h?.leaveType === 'half') {
+          base.leaveType = 'half';
+        }
         if (h?.excludeFromDeduction === true) {
           return { ...base, excludeFromDeduction: true };
         }
@@ -144,6 +186,16 @@ function toEmployee(doc) {
           month: Number(e?.month) || 0,
           year: Number(e?.year) || 0,
           daysOnTime: clampDaysOnTime0to30(e?.daysOnTime),
+        }))
+        .filter((e) => e.month >= 1 && e.month <= 12 && e.year >= 2000 && e.year <= 2100)
+    : [];
+  const monthlyExtraWork = Array.isArray(o.monthlyExtraWork)
+    ? o.monthlyExtraWork
+        .map((e) => ({
+          month: Number(e?.month) || 0,
+          year: Number(e?.year) || 0,
+          extraFullDays: clampNonNegativeHalfStep(e?.extraFullDays),
+          extraHalfDays: clampNonNegativeHalfStep(e?.extraHalfDays),
         }))
         .filter((e) => e.month >= 1 && e.month <= 12 && e.year >= 2000 && e.year <= 2100)
     : [];
@@ -161,7 +213,10 @@ function toEmployee(doc) {
     holidays,
   };
   if (monthlyDaysOnTime.length > 0) {
-    return { ...base, monthlyDaysOnTime };
+    base.monthlyDaysOnTime = monthlyDaysOnTime;
+  }
+  if (monthlyExtraWork.length > 0) {
+    base.monthlyExtraWork = monthlyExtraWork;
   }
   return base;
 }
@@ -174,13 +229,14 @@ const api = express.Router();
 
 api.get('/employees', async (_req, res) => {
   try {
+    const accountMode = getRequestAccountMode(_req);
     if (mongoose.connection.readyState !== 1) {
       return res.status(503).json({
         error:
           'MongoDB is not connected. Start MongoDB (or check MONGODB_URI), then run: npm run api',
       });
     }
-    const docs = await Employee.find(activeOnly).lean();
+    const docs = await Employee.find(scopedActiveOnly(accountMode)).lean();
     const out = [];
     for (const d of docs) {
       try {
@@ -203,11 +259,13 @@ api.get('/employees', async (_req, res) => {
 
 api.post('/employees', async (req, res) => {
   try {
+    const accountMode = getRequestAccountMode(req);
     const { name, phone, salary, aadharPhoto, dateOfJoining, holidays } = req.body;
     if (!name || salary == null) {
       return res.status(400).json({ error: 'name and salary are required' });
     }
     const doc = await Employee.create({
+      accountMode,
       name: String(name).trim(),
       phone: phone != null ? String(phone).trim() : '',
       salary: Number(salary),
@@ -225,6 +283,7 @@ api.post('/employees', async (req, res) => {
 
 api.patch('/employees/:id', async (req, res) => {
   try {
+    const accountMode = getRequestAccountMode(req);
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ error: 'Invalid id' });
@@ -242,20 +301,23 @@ api.patch('/employees/:id', async (req, res) => {
       body.aadharPhoto = req.body.aadharPhoto;
     }
 
-    const existing = await findActiveEmployee(id);
+    const existing = await findActiveEmployee(id, accountMode);
     if (!existing) return res.status(404).json({ error: 'Not found' });
 
     if (req.body.aadharPhoto === null) {
-      await Employee.findOneAndUpdate({ _id: id, ...activeOnly }, { $unset: { aadharPhoto: 1 } });
+      await Employee.findOneAndUpdate(
+        { _id: id, ...scopedActiveOnly(accountMode) },
+        { $unset: { aadharPhoto: 1 } }
+      );
     }
     if (Object.keys(body).length > 0) {
       await Employee.findOneAndUpdate(
-        { _id: id, ...activeOnly },
+        { _id: id, ...scopedActiveOnly(accountMode) },
         { $set: body },
         { runValidators: true }
       );
     }
-    const doc = await findActiveEmployee(id);
+    const doc = await findActiveEmployee(id, accountMode);
     if (!doc) return res.status(404).json({ error: 'Not found' });
     res.json(toEmployee(doc));
   } catch (e) {
@@ -266,12 +328,13 @@ api.patch('/employees/:id', async (req, res) => {
 
 api.delete('/employees/:id', async (req, res) => {
   try {
+    const accountMode = getRequestAccountMode(req);
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ error: 'Invalid id' });
     }
     const doc = await Employee.findOneAndUpdate(
-      { _id: id, ...activeOnly },
+      { _id: id, ...scopedActiveOnly(accountMode) },
       { $set: { isDeleted: true } },
       { new: true }
     );
@@ -285,11 +348,12 @@ api.delete('/employees/:id', async (req, res) => {
 
 api.post('/employees/:id/holidays', async (req, res) => {
   try {
+    const accountMode = getRequestAccountMode(req);
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ error: 'Invalid id' });
     }
-    const { date, month, year, excludeFromDeduction } = req.body;
+    const { date, month, year, excludeFromDeduction, leaveType } = req.body;
     if (date == null || month == null || year == null) {
       return res.status(400).json({ error: 'date, month, year required' });
     }
@@ -297,9 +361,10 @@ api.post('/employees/:id/holidays', async (req, res) => {
       date,
       month: Number(month),
       year: Number(year),
+      ...(leaveType === 'half' ? { leaveType: 'half' } : {}),
       ...(excludeFromDeduction === true ? { excludeFromDeduction: true } : {}),
     };
-    const emp = await findActiveEmployee(id);
+    const emp = await findActiveEmployee(id, accountMode);
     if (!emp) return res.status(404).json({ error: 'Not found' });
     if (emp.holidays.some((h) => h.date === holiday.date)) {
       return res.json(toEmployee(emp));
@@ -315,17 +380,21 @@ api.post('/employees/:id/holidays', async (req, res) => {
 
 api.patch('/employees/:id/holidays/:date', async (req, res) => {
   try {
+    const accountMode = getRequestAccountMode(req);
     const { id, date } = req.params;
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ error: 'Invalid id' });
     }
     const decodedDate = decodeURIComponent(date);
-    const emp = await findActiveEmployee(id);
+    const emp = await findActiveEmployee(id, accountMode);
     if (!emp) return res.status(404).json({ error: 'Not found' });
     const h = emp.holidays.find((x) => x.date === decodedDate);
     if (!h) return res.status(404).json({ error: 'Leave not found' });
     if ('excludeFromDeduction' in req.body) {
       h.excludeFromDeduction = Boolean(req.body.excludeFromDeduction);
+    }
+    if ('leaveType' in req.body) {
+      h.leaveType = req.body.leaveType === 'half' ? 'half' : 'full';
     }
     emp.markModified('holidays');
     await emp.save();
@@ -338,13 +407,14 @@ api.patch('/employees/:id/holidays/:date', async (req, res) => {
 
 api.delete('/employees/:id/holidays/:date', async (req, res) => {
   try {
+    const accountMode = getRequestAccountMode(req);
     const { id, date } = req.params;
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ error: 'Invalid id' });
     }
     const decodedDate = decodeURIComponent(date);
     const doc = await Employee.findOneAndUpdate(
-      { _id: id, ...activeOnly },
+      { _id: id, ...scopedActiveOnly(accountMode) },
       { $pull: { holidays: { date: decodedDate } } },
       { new: true }
     );
@@ -358,6 +428,7 @@ api.delete('/employees/:id/holidays/:date', async (req, res) => {
 
 api.patch('/employees/:id/month-days-on-time', async (req, res) => {
   try {
+    const accountMode = getRequestAccountMode(req);
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ error: 'Invalid id' });
@@ -371,7 +442,7 @@ api.patch('/employees/:id/month-days-on-time', async (req, res) => {
     if (m < 1 || m > 12 || !Number.isFinite(y)) {
       return res.status(400).json({ error: 'Invalid month or year' });
     }
-    const emp = await findActiveEmployee(id);
+    const emp = await findActiveEmployee(id, accountMode);
     if (!emp) return res.status(404).json({ error: 'Not found' });
     if (!Array.isArray(emp.monthlyDaysOnTime)) {
       emp.monthlyDaysOnTime = [];
@@ -395,6 +466,58 @@ api.patch('/employees/:id/month-days-on-time', async (req, res) => {
       }
     }
     emp.markModified('monthlyDaysOnTime');
+    await emp.save();
+    res.json(toEmployee(emp));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+api.patch('/employees/:id/month-extra-work', async (req, res) => {
+  try {
+    const accountMode = getRequestAccountMode(req);
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
+    const { month, year, extraFullDays, extraHalfDays, clear } = req.body;
+    if (month == null || year == null) {
+      return res.status(400).json({ error: 'month and year required' });
+    }
+    const m = Number(month);
+    const y = Number(year);
+    if (m < 1 || m > 12 || !Number.isFinite(y)) {
+      return res.status(400).json({ error: 'Invalid month or year' });
+    }
+    const emp = await findActiveEmployee(id, accountMode);
+    if (!emp) return res.status(404).json({ error: 'Not found' });
+    if (!Array.isArray(emp.monthlyExtraWork)) {
+      emp.monthlyExtraWork = [];
+    }
+    if (clear === true) {
+      emp.monthlyExtraWork = emp.monthlyExtraWork.filter(
+        (e) => !(Number(e.month) === m && Number(e.year) === y)
+      );
+    } else {
+      const nextFull = clampNonNegativeHalfStep(extraFullDays);
+      const nextHalf = clampNonNegativeHalfStep(extraHalfDays);
+      const idx = emp.monthlyExtraWork.findIndex(
+        (e) => Number(e.month) === m && Number(e.year) === y
+      );
+      if (idx >= 0) {
+        emp.monthlyExtraWork[idx].extraFullDays = nextFull;
+        emp.monthlyExtraWork[idx].extraHalfDays = nextHalf;
+      } else {
+        emp.monthlyExtraWork.push({
+          month: m,
+          year: y,
+          extraFullDays: nextFull,
+          extraHalfDays: nextHalf,
+        });
+      }
+    }
+    emp.markModified('monthlyExtraWork');
     await emp.save();
     res.json(toEmployee(emp));
   } catch (e) {

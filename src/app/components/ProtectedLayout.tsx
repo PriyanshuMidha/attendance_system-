@@ -6,9 +6,9 @@ import { Layout } from './Layout';
 
 /** Auth gate + employee data scope + main shell with nav. */
 export const ProtectedLayout = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, authMode } = useAuth();
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || !authMode) {
     return <Navigate to="/login" replace />;
   }
 

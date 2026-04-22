@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 export const Layout = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, authMode } = useAuth();
   const { error, refreshEmployees } = useEmployees();
 
   const navItems = [
@@ -22,7 +22,12 @@ export const Layout = () => {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center gap-2">
               <BarChart3 className="w-8 h-8 text-blue-600" />
-              <h1 className="text-xl text-gray-900">Attendance & Salary Management</h1>
+              <div>
+                <h1 className="text-xl text-gray-900">Attendance & Salary Management</h1>
+                <p className="text-xs text-gray-500">
+                  {authMode === 'enhanced' ? 'Enhanced payroll mode' : 'Legacy payroll mode'}
+                </p>
+              </div>
             </div>
             <div className="flex items-center gap-1 flex-wrap">
               {navItems.map((item) => {
