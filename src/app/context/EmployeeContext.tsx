@@ -70,6 +70,7 @@ export type MonthExtraWorkEntry = {
   extraFullDays: number;
   extraHalfDays: number;
 };
+export type MonthAdvanceEntry = { month: number; year: number; amount: number };
 
 export interface Employee {
   id: string;
@@ -84,6 +85,7 @@ export interface Employee {
   /** Per-month display override; does not affect deduction / final salary */
   monthlyDaysOnTime?: MonthDaysOnTimeEntry[];
   monthlyExtraWork?: MonthExtraWorkEntry[];
+  monthlyAdvances?: MonthAdvanceEntry[];
 }
 
 /** PATCH body: use `aadharPhoto: null` to clear the image in MongoDB. */
@@ -118,6 +120,12 @@ interface EmployeeContextType {
       | { extraFullDays: number; extraHalfDays: number }
       | { clear: true }
   ) => Promise<void>;
+  patchMonthAdvance: (
+    id: string,
+    month: number,
+    year: number,
+    payload: { amount: number } | { clear: true }
+  ) => Promise<void>;
   getEmployee: (id: string) => Employee | undefined;
   calculateSalary: (employee: Employee, month?: number, year?: number) => {
     baseSalary: number;
@@ -126,6 +134,7 @@ interface EmployeeContextType {
     dailyRate: number;
     deduction: number;
     extraPay: number;
+    advanceDeduction: number;
     finalSalary: number;
   };
 }
@@ -303,15 +312,18 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
   ) => {
     setError(null);
     try {
-      const body =
-        'clear' in payload && payload.clear
-          ? { month, year, clear: true }
-          : {
-              month,
-              year,
-              extraFullDays: payload.extraFullDays,
-              extraHalfDays: payload.extraHalfDays,
-            };
+      let body: Record<string, unknown>;
+      if ('clear' in payload && payload.clear) {
+        body = { month, year, clear: true };
+      } else {
+        const p = payload as { extraFullDays: number; extraHalfDays: number };
+        body = {
+          month,
+          year,
+          extraFullDays: p.extraFullDays,
+          extraHalfDays: p.extraHalfDays,
+        };
+      }
       const updated = await apiFetch<Employee>(`/employees/${id}/month-extra-work`, {
         method: 'PATCH',
         headers: authHeaders(),
@@ -320,6 +332,33 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
       setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to update extra work';
+      setError(msg);
+      throw e;
+    }
+  };
+
+  const patchMonthAdvance = async (
+    id: string,
+    month: number,
+    year: number,
+    payload: { amount: number } | { clear: true }
+  ) => {
+    setError(null);
+    try {
+      let body: Record<string, unknown>;
+      if ('clear' in payload && payload.clear) {
+        body = { month, year, clear: true };
+      } else {
+        body = { month, year, amount: (payload as { amount: number }).amount };
+      }
+      const updated = await apiFetch<Employee>(`/employees/${id}/month-advance`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      });
+      setEmployees((prev) => prev.map((emp) => (emp.id === id ? updated : emp)));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to update advance';
       setError(msg);
       throw e;
     }
@@ -385,6 +424,10 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
     let absentDays = totalLeaveDays;
     let computedDaysOnTime = 30 - totalLeaveDays;
     let extraPay = 0;
+    const advanceEntry = employee.monthlyAdvances?.find(
+      (e) => e.month === targetMonth && e.year === targetYear
+    );
+    const advanceDeduction = Math.max(0, Number(advanceEntry?.amount ?? 0));
 
     if (authMode === 'enhanced') {
       absentDays = monthLeaves.reduce((sum, h) => sum + (h.leaveType === 'half' ? 0.5 : 1), 0);
@@ -412,7 +455,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
       dotOverride != null && Number.isFinite(dotOverride.daysOnTime)
         ? Math.min(30, Math.max(0, dotOverride.daysOnTime))
         : computedDaysOnTime;
-    const finalSalary = employee.salary - deduction + extraPay;
+    const finalSalary = employee.salary - deduction + extraPay - advanceDeduction;
 
     return {
       baseSalary: employee.salary,
@@ -421,6 +464,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
       dailyRate: parseFloat(dailyRate.toFixed(2)),
       deduction: parseFloat(deduction.toFixed(2)),
       extraPay: parseFloat(extraPay.toFixed(2)),
+      advanceDeduction: parseFloat(advanceDeduction.toFixed(2)),
       finalSalary: parseFloat(finalSalary.toFixed(2)),
     };
   };
@@ -440,6 +484,7 @@ export const EmployeeProvider: React.FC<{ children: ReactNode }> = ({ children }
         patchHoliday,
         patchMonthDaysOnTime,
         patchMonthExtraWork,
+        patchMonthAdvance,
         getEmployee,
         calculateSalary,
       }}

@@ -85,6 +85,15 @@ const monthExtraWorkSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const monthAdvanceSchema = new mongoose.Schema(
+  {
+    month: { type: Number, required: true },
+    year: { type: Number, required: true },
+    amount: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const employeeSchema = new mongoose.Schema(
   {
     accountMode: { type: String, enum: ['legacy', 'enhanced'], default: 'legacy' },
@@ -97,6 +106,7 @@ const employeeSchema = new mongoose.Schema(
     /** Display/reporting only; salary still follows holidays + excludeFromDeduction. */
     monthlyDaysOnTime: { type: [monthDaysOnTimeSchema], default: [] },
     monthlyExtraWork: { type: [monthExtraWorkSchema], default: [] },
+    monthlyAdvances: { type: [monthAdvanceSchema], default: [] },
     isDeleted: { type: Boolean, default: false },
   },
   { timestamps: true }
@@ -144,6 +154,12 @@ function clampDaysOnTime0to30(v) {
 
 function clampNonNegativeHalfStep(v) {
   const n = Math.round(Number(v) * 2) / 2;
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, n);
+}
+
+function clampNonNegativeMoney(v) {
+  const n = Math.round(Number(v) * 100) / 100;
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, n);
 }
@@ -199,6 +215,15 @@ function toEmployee(doc) {
         }))
         .filter((e) => e.month >= 1 && e.month <= 12 && e.year >= 2000 && e.year <= 2100)
     : [];
+  const monthlyAdvances = Array.isArray(o.monthlyAdvances)
+    ? o.monthlyAdvances
+        .map((e) => ({
+          month: Number(e?.month) || 0,
+          year: Number(e?.year) || 0,
+          amount: clampNonNegativeMoney(e?.amount),
+        }))
+        .filter((e) => e.month >= 1 && e.month <= 12 && e.year >= 2000 && e.year <= 2100)
+    : [];
   const base = {
     id,
     name: String(o.name ?? ''),
@@ -217,6 +242,9 @@ function toEmployee(doc) {
   }
   if (monthlyExtraWork.length > 0) {
     base.monthlyExtraWork = monthlyExtraWork;
+  }
+  if (monthlyAdvances.length > 0) {
+    base.monthlyAdvances = monthlyAdvances;
   }
   return base;
 }
@@ -518,6 +546,54 @@ api.patch('/employees/:id/month-extra-work', async (req, res) => {
       }
     }
     emp.markModified('monthlyExtraWork');
+    await emp.save();
+    res.json(toEmployee(emp));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+api.patch('/employees/:id/month-advance', async (req, res) => {
+  try {
+    const accountMode = getRequestAccountMode(req);
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
+    const { month, year, amount, clear } = req.body;
+    if (month == null || year == null) {
+      return res.status(400).json({ error: 'month and year required' });
+    }
+    const m = Number(month);
+    const y = Number(year);
+    if (m < 1 || m > 12 || !Number.isFinite(y)) {
+      return res.status(400).json({ error: 'Invalid month or year' });
+    }
+    const emp = await findActiveEmployee(id, accountMode);
+    if (!emp) return res.status(404).json({ error: 'Not found' });
+    if (!Array.isArray(emp.monthlyAdvances)) {
+      emp.monthlyAdvances = [];
+    }
+    if (clear === true) {
+      emp.monthlyAdvances = emp.monthlyAdvances.filter(
+        (e) => !(Number(e.month) === m && Number(e.year) === y)
+      );
+    } else {
+      if (amount == null) {
+        return res.status(400).json({ error: 'amount required unless clear is true' });
+      }
+      const nextAmount = clampNonNegativeMoney(amount);
+      const idx = emp.monthlyAdvances.findIndex(
+        (e) => Number(e.month) === m && Number(e.year) === y
+      );
+      if (idx >= 0) {
+        emp.monthlyAdvances[idx].amount = nextAmount;
+      } else {
+        emp.monthlyAdvances.push({ month: m, year: y, amount: nextAmount });
+      }
+    }
+    emp.markModified('monthlyAdvances');
     await emp.save();
     res.json(toEmployee(emp));
   } catch (e) {

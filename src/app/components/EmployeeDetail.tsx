@@ -61,6 +61,7 @@ export const EmployeeDetail = () => {
     patchHoliday,
     patchMonthDaysOnTime,
     patchMonthExtraWork,
+    patchMonthAdvance,
     calculateSalary,
     updateEmployee,
     deleteEmployee,
@@ -88,6 +89,7 @@ export const EmployeeDetail = () => {
   const [daysOnTimeDraft, setDaysOnTimeDraft] = useState('');
   const [extraFullDaysDraft, setExtraFullDaysDraft] = useState('0');
   const [extraHalfDaysDraft, setExtraHalfDaysDraft] = useState('0');
+  const [advanceDraft, setAdvanceDraft] = useState('0');
   const isEnhancedMode = authMode === 'enhanced';
 
   const employee = getEmployee(id!);
@@ -105,6 +107,11 @@ export const EmployeeDetail = () => {
   const extraWorkStoreKey =
     employee?.monthlyExtraWork
       ?.map((e) => `${e.month}-${e.year}-${e.extraFullDays}-${e.extraHalfDays}`)
+      .sort()
+      .join('|') ?? '';
+  const advanceStoreKey =
+    employee?.monthlyAdvances
+      ?.map((e) => `${e.month}-${e.year}-${e.amount}`)
       .sort()
       .join('|') ?? '';
 
@@ -127,7 +134,11 @@ export const EmployeeDetail = () => {
     );
     setExtraFullDaysDraft(String(extraEntry?.extraFullDays ?? 0));
     setExtraHalfDaysDraft(String(extraEntry?.extraHalfDays ?? 0));
-  }, [employee, viewMonth, viewYear, leaveKeyForView, daysOnTimeStoreKey, extraWorkStoreKey, isEnhancedMode]);
+    const advanceEntry = employee.monthlyAdvances?.find(
+      (e) => e.month === viewMonth && e.year === viewYear
+    );
+    setAdvanceDraft(String(advanceEntry?.amount ?? 0));
+  }, [employee, viewMonth, viewYear, leaveKeyForView, daysOnTimeStoreKey, extraWorkStoreKey, advanceStoreKey, isEnhancedMode]);
 
   useEffect(() => {
     setHolidayMonth(viewMonth);
@@ -247,6 +258,9 @@ export const EmployeeDetail = () => {
   const hasDaysOverride = Boolean(
     employee.monthlyDaysOnTime?.some((e) => e.month === viewMonth && e.year === viewYear)
   );
+  const hasAdvance = Boolean(
+    employee.monthlyAdvances?.some((e) => e.month === viewMonth && e.year === viewYear)
+  );
 
   const handleSaveDaysOnTime = async () => {
     const n = Number(daysOnTimeDraft);
@@ -294,6 +308,27 @@ export const EmployeeDetail = () => {
   const handleResetExtraWork = async () => {
     try {
       await patchMonthExtraWork(employee.id, viewMonth, viewYear, { clear: true });
+    } catch {
+      /* error shown in layout */
+    }
+  };
+
+  const handleSaveAdvance = async () => {
+    const amount = Number(advanceDraft);
+    if (!Number.isFinite(amount) || amount < 0) {
+      alert('Enter advance paid as 0 or more');
+      return;
+    }
+    try {
+      await patchMonthAdvance(employee.id, viewMonth, viewYear, { amount });
+    } catch {
+      /* error shown in layout */
+    }
+  };
+
+  const handleResetAdvance = async () => {
+    try {
+      await patchMonthAdvance(employee.id, viewMonth, viewYear, { clear: true });
     } catch {
       /* error shown in layout */
     }
@@ -631,6 +666,36 @@ export const EmployeeDetail = () => {
               <div>
                 <p className="text-sm text-gray-600 mb-1">Deduction</p>
                 <p className="text-lg text-red-600">-₹{formatInr(currentMonthSalary.deduction)}</p>
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <p className="text-sm text-gray-600 mb-1">Advance paid</p>
+                <p className="text-xs text-gray-500 mb-2">Subtracted from this month&apos;s final salary</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={advanceDraft}
+                    onChange={(e) => setAdvanceDraft(e.target.value)}
+                    className="w-28 px-2 py-1.5 border border-gray-300 rounded-lg text-lg text-orange-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveAdvance()}
+                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    Save
+                  </button>
+                  {hasAdvance && (
+                    <button
+                      type="button"
+                      onClick={() => void handleResetAdvance()}
+                      className="px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
               </div>
               {isEnhancedMode && (
                 <div>

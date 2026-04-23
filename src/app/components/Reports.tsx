@@ -29,6 +29,7 @@ type ReportRow = {
   dailyRate: number;
   deduction: number;
   extraPay: number;
+  advanceDeduction: number;
   finalSalary: number;
 };
 
@@ -40,7 +41,7 @@ function buildSalaryReportHtml(
   reportData: ReportRow[],
   monthLabel: string,
   year: number,
-  totals: { base: number; deduction: number; extraPay: number; final: number },
+  totals: { base: number; deduction: number; extraPay: number; advance: number; final: number },
   opts?: { showExtraPay?: boolean }
 ) {
   const showExtraPay = opts?.showExtraPay === true;
@@ -56,6 +57,7 @@ function buildSalaryReportHtml(
         <div class="row"><dt>Daily Rate</dt><dd>₹${formatInr(emp.dailyRate)}</dd></div>
         <div class="row deduction"><dt>Deduction</dt><dd>-₹${formatInr(emp.deduction)}</dd></div>
         ${showExtraPay ? `<div class="row extra"><dt>Extra Pay</dt><dd>₹${formatInr(emp.extraPay)}</dd></div>` : ''}
+        <div class="row advance"><dt>Advance Paid</dt><dd>-₹${formatInr(emp.advanceDeduction)}</dd></div>
         <div class="row final"><dt>Final Salary</dt><dd>₹${formatInr(emp.finalSalary)}</dd></div>
       </dl>
     </article>`
@@ -125,6 +127,7 @@ function buildSalaryReportHtml(
     .row dd { margin: 0; font-weight: 500; text-align: right; }
     .row.deduction dt, .row.deduction dd { color: #dc2626; font-weight: 600; }
     .row.extra dt, .row.extra dd { color: #1d4ed8; font-weight: 600; }
+    .row.advance dt, .row.advance dd { color: #c2410c; font-weight: 600; }
     .row.final { margin-top: 10px; padding-top: 8px; border-top: 1px solid #e5e7eb; }
     .row.final dt, .row.final dd {
       color: #0d9488;
@@ -167,6 +170,7 @@ function buildSalaryReportHtml(
     <div><strong>Total base</strong><br/>₹${formatInr(totals.base)}</div>
     <div><strong>Total deduction</strong><br/><span style="color:#dc2626">₹${formatInr(totals.deduction)}</span></div>
     ${showExtraPay ? `<div><strong>Total extra</strong><br/><span style="color:#1d4ed8">₹${formatInr(totals.extraPay)}</span></div>` : ''}
+    <div><strong>Total advance</strong><br/><span style="color:#c2410c">₹${formatInr(totals.advance)}</span></div>
     <div><strong>Total final</strong><br/><span style="color:#0d9488">₹${formatInr(totals.final)}</span></div>
   </div>
   <p class="footer-note">Generated ${escapeHtml(new Date().toLocaleString())}</p>
@@ -215,6 +219,7 @@ export const Reports = () => {
   const totalBaseSalary = reportData.reduce((sum, emp) => sum + emp.baseSalary, 0);
   const totalDeductions = reportData.reduce((sum, emp) => sum + emp.deduction, 0);
   const totalExtraPay = reportData.reduce((sum, emp) => sum + emp.extraPay, 0);
+  const totalAdvanceDeduction = reportData.reduce((sum, emp) => sum + emp.advanceDeduction, 0);
   const totalFinalSalary = reportData.reduce((sum, emp) => sum + emp.finalSalary, 0);
 
   const downloadCSV = () => {
@@ -227,6 +232,7 @@ export const Reports = () => {
       'Daily Rate',
       'Deduction',
       ...(isEnhancedMode ? ['Extra Pay'] : []),
+      'Advance Paid',
       'Final Salary',
     ];
 
@@ -239,6 +245,7 @@ export const Reports = () => {
       csvEscape(emp.dailyRate),
       csvEscape(emp.deduction),
       ...(isEnhancedMode ? [csvEscape(emp.extraPay)] : []),
+      csvEscape(emp.advanceDeduction),
       csvEscape(emp.finalSalary),
     ]);
 
@@ -247,8 +254,8 @@ export const Reports = () => {
       ...rows.map((row) => row.join(',')),
       '',
       isEnhancedMode
-        ? `Total,,${totalBaseSalary},,,${totalDeductions},${totalExtraPay},${totalFinalSalary}`
-        : `Total,,${totalBaseSalary},,,${totalDeductions},${totalFinalSalary}`,
+        ? `Total,,${totalBaseSalary},,,,${totalDeductions},${totalExtraPay},${totalAdvanceDeduction},${totalFinalSalary}`
+        : `Total,,${totalBaseSalary},,,,${totalDeductions},${totalAdvanceDeduction},${totalFinalSalary}`,
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
@@ -265,7 +272,7 @@ export const Reports = () => {
       reportData,
       monthLabel,
       selectedYear,
-      { base: totalBaseSalary, deduction: totalDeductions, extraPay: totalExtraPay, final: totalFinalSalary },
+      { base: totalBaseSalary, deduction: totalDeductions, extraPay: totalExtraPay, advance: totalAdvanceDeduction, final: totalFinalSalary },
       { showExtraPay: isEnhancedMode }
     );
 
@@ -368,7 +375,7 @@ export const Reports = () => {
         </div>
       </div>
 
-      <div className={`grid grid-cols-1 ${isEnhancedMode ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6 mb-6`}>
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isEnhancedMode ? 'xl:grid-cols-5' : 'lg:grid-cols-4'} gap-6 mb-6`}>
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div className="flex items-center gap-3 mb-2">
             <div className="p-2 bg-blue-50 rounded-lg">
@@ -406,6 +413,18 @@ export const Reports = () => {
             </div>
           </div>
         )}
+
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="p-2 bg-orange-50 rounded-lg">
+              <FileText className="w-6 h-6 text-orange-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Total Advance Paid</p>
+              <p className="text-2xl text-orange-700">₹{formatInr(totalAdvanceDeduction)}</p>
+            </div>
+          </div>
+        </div>
 
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div className="flex items-center gap-3 mb-2">
@@ -469,6 +488,10 @@ export const Reports = () => {
                       <dd>₹{formatInr(emp.extraPay)}</dd>
                     </div>
                   )}
+                  <div className="flex justify-between gap-2 text-orange-700 font-semibold">
+                    <dt>Advance Paid</dt>
+                    <dd>-₹{formatInr(emp.advanceDeduction)}</dd>
+                  </div>
                   <div className="flex justify-between gap-2 pt-2 mt-1 border-t border-gray-200 text-teal-600 font-bold text-base">
                     <dt>Final Salary</dt>
                     <dd>₹{formatInr(emp.finalSalary)}</dd>
@@ -513,6 +536,9 @@ export const Reports = () => {
                       </th>
                     )}
                     <th className="px-6 py-3 text-right text-xs text-gray-600 uppercase tracking-wider">
+                      Advance Paid
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs text-gray-600 uppercase tracking-wider">
                       Final Salary
                     </th>
                   </tr>
@@ -544,6 +570,9 @@ export const Reports = () => {
                           ₹{formatInr(emp.extraPay)}
                         </td>
                       )}
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-orange-700">
+                        ₹{formatInr(emp.advanceDeduction)}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-teal-600 font-medium">
                         ₹{formatInr(emp.finalSalary)}
                       </td>
@@ -567,6 +596,9 @@ export const Reports = () => {
                         ₹{formatInr(totalExtraPay)}
                       </td>
                     )}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-orange-700">
+                      ₹{formatInr(totalAdvanceDeduction)}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-teal-600 font-medium">
                       ₹{formatInr(totalFinalSalary)}
                     </td>

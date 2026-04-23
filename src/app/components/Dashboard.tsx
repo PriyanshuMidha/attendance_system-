@@ -37,6 +37,7 @@ export const Dashboard = () => {
     calculateSalary,
     patchMonthDaysOnTime,
     patchMonthExtraWork,
+    patchMonthAdvance,
   } = useEmployees();
   const { month: viewMonth, year: viewYear, setViewMonthYear } = useViewMonth();
   const { authMode } = useAuth();
@@ -49,6 +50,7 @@ export const Dashboard = () => {
   const [daysOnTimeDraft, setDaysOnTimeDraft] = useState('');
   const [extraFullDaysDraft, setExtraFullDaysDraft] = useState('0');
   const [extraHalfDaysDraft, setExtraHalfDaysDraft] = useState('0');
+  const [advanceDraft, setAdvanceDraft] = useState('0');
   const isEnhancedMode = authMode === 'enhanced';
 
   const yearNow = new Date().getFullYear();
@@ -70,6 +72,11 @@ export const Dashboard = () => {
   const selectedExtraWorkKey =
     selectedEmp?.monthlyExtraWork
       ?.map((e) => `${e.month}-${e.year}-${e.extraFullDays}-${e.extraHalfDays}`)
+      .sort()
+      .join('|') ?? '';
+  const selectedAdvanceKey =
+    selectedEmp?.monthlyAdvances
+      ?.map((e) => `${e.month}-${e.year}-${e.amount}`)
       .sort()
       .join('|') ?? '';
 
@@ -94,7 +101,11 @@ export const Dashboard = () => {
     );
     setExtraFullDaysDraft(String(extraEntry?.extraFullDays ?? 0));
     setExtraHalfDaysDraft(String(extraEntry?.extraHalfDays ?? 0));
-  }, [selectedEmployee, employees, viewMonth, viewYear, selectedLeaveKey, selectedDotKey, selectedExtraWorkKey, isEnhancedMode]);
+    const advanceEntry = emp.monthlyAdvances?.find(
+      (e) => e.month === viewMonth && e.year === viewYear
+    );
+    setAdvanceDraft(String(advanceEntry?.amount ?? 0));
+  }, [selectedEmployee, employees, viewMonth, viewYear, selectedLeaveKey, selectedDotKey, selectedExtraWorkKey, selectedAdvanceKey, isEnhancedMode]);
 
   const getDaysOnTimeValue = () => {
     const n = Number(daysOnTimeDraft);
@@ -124,9 +135,23 @@ export const Dashboard = () => {
     return { extraFullDays, extraHalfDays };
   };
 
+  const getAdvanceValue = () => {
+    const amount = Number(advanceDraft);
+    if (!Number.isFinite(amount) || amount < 0) return null;
+    return amount;
+  };
+
   const handleResetExtraWork = async (employeeId: string) => {
     try {
       await patchMonthExtraWork(employeeId, viewMonth, viewYear, { clear: true });
+    } catch {
+      /* error shown in layout */
+    }
+  };
+
+  const handleResetAdvance = async (employeeId: string) => {
+    try {
+      await patchMonthAdvance(employeeId, viewMonth, viewYear, { clear: true });
     } catch {
       /* error shown in layout */
     }
@@ -142,6 +167,12 @@ export const Dashboard = () => {
     const extraWorkValues = getExtraWorkValues();
     if (extraWorkValues == null) {
       alert('Enter extra work as 0 or more');
+      return;
+    }
+
+    const advanceValue = getAdvanceValue();
+    if (advanceValue == null) {
+      alert('Enter advance paid as 0 or more');
       return;
     }
 
@@ -161,6 +192,7 @@ export const Dashboard = () => {
     try {
       await patchMonthDaysOnTime(employeeId, viewMonth, viewYear, { daysOnTime: daysValue });
       await patchMonthExtraWork(employeeId, viewMonth, viewYear, extraWorkValues);
+      await patchMonthAdvance(employeeId, viewMonth, viewYear, { amount: advanceValue });
       for (const h of leaveDays) {
         await addHoliday(employeeId, h);
       }
@@ -169,6 +201,7 @@ export const Dashboard = () => {
       setHolidayDayCount('1');
       setHolidayLeaveType('full');
       setLeaveHolidayNoDeduction(false);
+      setAdvanceDraft('0');
     } catch {
       /* error shown in layout */
     }
@@ -284,6 +317,12 @@ export const Dashboard = () => {
                         <span className="text-base text-red-600">-₹{formatInr(salaryData.deduction)}</span>
                       </div>
                     )}
+                    {salaryData.advanceDeduction > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-600">Advance paid:</span>
+                        <span className="text-base text-orange-700">-₹{formatInr(salaryData.advanceDeduction)}</span>
+                      </div>
+                    )}
                     {isEnhancedMode && (
                       <div className="flex justify-between items-center">
                         <span className="text-sm text-gray-600">Daily Rate:</span>
@@ -382,6 +421,29 @@ export const Dashboard = () => {
                       />
                       Leave holiday (no salary deduction)
                     </label>
+                    <div className="rounded-lg border border-orange-100 bg-orange-50 p-3 space-y-2">
+                      <p className="text-xs font-medium text-orange-900">Advance paid ({payrollLabel})</p>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={advanceDraft}
+                        onChange={(e) => setAdvanceDraft(e.target.value)}
+                        className="w-full px-3 py-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <p className="text-xs text-orange-800">This amount is deducted from the final salary.</p>
+                      {employee.monthlyAdvances?.some(
+                        (e) => e.month === viewMonth && e.year === viewYear
+                      ) && (
+                        <button
+                          type="button"
+                          onClick={() => void handleResetAdvance(employee.id)}
+                          className="w-full sm:w-auto px-3 py-2 text-sm border border-orange-200 text-orange-800 rounded-lg hover:bg-white"
+                        >
+                          Reset advance
+                        </button>
+                      )}
+                    </div>
                     {isEnhancedMode && (
                       <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 space-y-2">
                         <p className="text-xs font-medium text-blue-900">Extra work ({payrollLabel})</p>
@@ -439,6 +501,7 @@ export const Dashboard = () => {
                           setHolidayDayCount('1');
                           setHolidayLeaveType('full');
                           setLeaveHolidayNoDeduction(false);
+                          setAdvanceDraft('0');
                         }}
                         className="flex-1 px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300"
                       >
