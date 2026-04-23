@@ -7,7 +7,7 @@ import {
 } from '../context/EmployeeContext';
 import { useViewMonth } from '../context/ViewMonthContext';
 import { useAuth } from '../context/AuthContext';
-import { Calendar, Plus, UserCircle } from 'lucide-react';
+import { Calendar, Plus, Search, UserCircle, X } from 'lucide-react';
 import { formatInr } from '../../lib/formatInr';
 
 const MONTH_OPTIONS = [
@@ -51,6 +51,7 @@ export const Dashboard = () => {
   const [extraFullDaysDraft, setExtraFullDaysDraft] = useState('0');
   const [extraHalfDaysDraft, setExtraHalfDaysDraft] = useState('0');
   const [advanceDraft, setAdvanceDraft] = useState('0');
+  const [searchQuery, setSearchQuery] = useState('');
   const isEnhancedMode = authMode === 'enhanced';
 
   const yearNow = new Date().getFullYear();
@@ -210,6 +211,12 @@ export const Dashboard = () => {
   const payrollLabel =
     MONTH_OPTIONS.find((m) => m.value === viewMonth)?.label ?? '';
   const headerDateLine = `${payrollLabel} ${viewYear}`;
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const filteredEmployees = normalizedSearch
+    ? employees.filter((employee) =>
+        employee.name.toLowerCase().includes(normalizedSearch)
+      )
+    : employees;
 
   return (
     <div>
@@ -277,14 +284,55 @@ export const Dashboard = () => {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {employees.map((employee) => {
-            const salaryData = calculateSalary(employee, viewMonth, viewYear);
-            return (
-              <div
-                key={employee.id}
-                className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow"
-              >
+        <>
+          <div className="mb-5">
+            <label className="block text-xs text-gray-500 mb-1">Search employee by name</label>
+            <div className="relative max-w-xl">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setSelectedEmployee(null);
+                }}
+                placeholder="Search by name"
+                className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-10 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSelectedEmployee(null);
+                  }}
+                  className="absolute right-2 top-1/2 rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 -translate-y-1/2"
+                  title="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-gray-500">
+              Showing {filteredEmployees.length} of {employees.length} employees
+            </p>
+          </div>
+
+          {filteredEmployees.length === 0 ? (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+              <Search className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg text-gray-900 mb-2">No employee found</h3>
+              <p className="text-gray-600">Try another name.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredEmployees.map((employee) => {
+                const salaryData = calculateSalary(employee, viewMonth, viewYear);
+                return (
+                  <div
+                    key={employee.id}
+                    className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow"
+                  >
                 <div
                   onClick={() => navigate(`/employee/${employee.id}`)}
                   className="cursor-pointer mb-4"
@@ -523,10 +571,12 @@ export const Dashboard = () => {
                     Add Holiday
                   </button>
                 )}
-              </div>
-            );
-          })}
-        </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
